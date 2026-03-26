@@ -5,7 +5,7 @@ from sqlmodel import SQLModel
 
 from app.core.database import engine
 import app.models 
-from app.api import employees, dependencies, cameras, analytics, websockets
+from app.api import employees, departments, cameras, analytics, websockets
 
 
 @asynccontextmanager
@@ -27,6 +27,11 @@ app.add_middleware(
 )
 
 app.include_router(employees.router)
+app.include_router(employees.router)
+app.include_router(departments.router)
+app.include_router(cameras.router)
+app.include_router(websockets.router)
+app.include_router(analytics.router)
 
 @app.get("/")
 def root():
