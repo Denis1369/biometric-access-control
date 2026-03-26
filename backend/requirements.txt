@@ -1,0 +1,16 @@
+# Web Framework
+fastapi
+uvicorn[standard]
+python-multipart
+
+# Database
+sqlmodel
+pymysql
+
+# Environment
+python-dotenv
+
+# Computer Vision & ML
+opencv-python
+ultralytics
+deepface
