@@ -4,7 +4,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import SQLModel
 
 from app.core.database import engine
-import app.models 
 from app.api import employees, departments, cameras, analytics, websockets
 
 

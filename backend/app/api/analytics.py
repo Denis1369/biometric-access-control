@@ -7,7 +7,7 @@ from typing import List
 from app.core.database import get_session
 from app.models.employees import Employee
 from app.models.cameras import Camera
-from app.models.events import AccessLog, TrackingLog
+from app.models.logs import AccessLog, TrackingLog
 
 router = APIRouter(prefix="/api/analytics", tags=["Аналитика и Журналы"])
 
