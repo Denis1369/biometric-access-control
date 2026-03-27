@@ -3,6 +3,10 @@ import base64
 import cv2
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from sqlmodel import Session
+from app.core.database import engine
+from app.models.cameras import Camera
+
 router = APIRouter(prefix="/ws", tags=["Реальное время"])
 
 class ConnectionManager:
@@ -45,32 +49,51 @@ async def websocket_events(websocket: WebSocket):
 
 @router.websocket("/video/{camera_id}")
 async def websocket_video(websocket: WebSocket, camera_id: int):
-    """
-    Эндпоинт для потоковой передачи видео.
-    Захватывает кадры через OpenCV, сжимает их в JPEG и отправляет в формате Base64.
-    """
     await websocket.accept()
-    
-    video_source = 0
-    cap = cv2.VideoCapture(video_source)
 
+    cap = None
     try:
-        while cap.isOpened():
+        with Session(engine) as session:
+            camera = session.get(Camera, camera_id)
+
+        if not camera:
+            await websocket.close(code=4404, reason="Camera not found")
+            return
+
+        video_source = camera.ip_address
+        cap = cv2.VideoCapture(video_source)
+
+        if not cap.isOpened():
+            await websocket.close(code=1011, reason=f"Cannot open video source: {video_source}")
+            return
+
+        while True:
             success, frame = cap.read()
             if not success:
                 await asyncio.sleep(0.1)
                 continue
 
             frame = cv2.resize(frame, (640, 480))
-            
-            _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
-            frame_base64 = base64.b64encode(buffer).decode('utf-8')
+            ok, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            if not ok:
+                await asyncio.sleep(0.03)
+                continue
 
-            await websocket.send_text(frame_base64)
+            # frame_base64 = base64.b64encode(buffer).decode("utf-8")
+            # await websocket.send_text(frame_base64)
             
-            await asyncio.sleep(0.03)
-            
+            await websocket.send_bytes(buffer.tobytes())
+
+            await asyncio.sleep(0.01)
+
     except WebSocketDisconnect:
         pass
+    except Exception as e:
+        print(f"[ws/video/{camera_id}] error: {e}")
+        try:
+            await websocket.close(code=1011, reason="Internal video stream error")
+        except Exception:
+            pass
     finally:
-        cap.release()
+        if cap is not None:
+            cap.release()

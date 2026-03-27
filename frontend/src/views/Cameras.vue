@@ -107,13 +107,16 @@ const cameraForm = ref({
 })
 
 let ws = null
+let lastBlobUrl = null
 const currentFrame = ref(null)
 
 const loadData = async () => {
   try {
     const response = await camerasApi.getCameras()
     cameras.value = response.data
-  } catch (error) {}
+  } catch (error) {
+    console.error('Ошибка загрузки камер', error)
+  }
 }
 
 const openNewDialog = () => {
@@ -150,7 +153,7 @@ const saveCamera = async () => {
     } else {
       await camerasApi.createCamera(payload)
     }
-    
+
     closeDialog()
     await loadData()
   } catch (error) {
@@ -163,35 +166,73 @@ const confirmDelete = async (id) => {
     try {
       await camerasApi.deleteCamera(id)
       await loadData()
-    } catch (error) {}
+    } catch (error) {
+      console.error('Ошибка удаления камеры', error)
+    }
   }
 }
 
 const openVideoDialog = (camera) => {
+  if (ws) {
+    ws.close()
+    ws = null
+  }
+
+  if (lastBlobUrl) {
+    URL.revokeObjectURL(lastBlobUrl)
+    lastBlobUrl = null
+  }
+
   selectedCamera.value = camera
   displayVideoDialog.value = true
   currentFrame.value = null
 
-  ws = new WebSocket(`ws://localhost:8000/ws/video/${camera.id}`)
-  
-  ws.onmessage = (event) => {
-    currentFrame.value = `data:image/jpeg;base64,${event.data}`
+  const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
+  const apiHost = `${window.location.hostname}:8000`
+  ws = new WebSocket(`${wsProtocol}://${apiHost}/ws/video/${camera.id}`)
+
+  ws.binaryType = 'blob'
+
+  ws.onopen = () => {
+    console.log('WS opened', camera.id)
   }
 
-  ws.onerror = () => {
-    alert('Ошибка подключения к потоку камеры')
-    closeVideoDialog()
+  ws.onmessage = (event) => {
+    if (lastBlobUrl) {
+      URL.revokeObjectURL(lastBlobUrl)
+    }
+
+    lastBlobUrl = URL.createObjectURL(event.data)
+    currentFrame.value = lastBlobUrl
+  }
+
+  ws.onerror = (event) => {
+    console.error('WS error', event)
+  }
+
+  ws.onclose = (event) => {
+    console.log('WS closed', event.code, event.reason)
+
+    if (displayVideoDialog.value) {
+      alert(`Поток закрыт: ${event.code} ${event.reason || ''}`)
+      closeVideoDialog()
+    }
   }
 }
 
 const closeVideoDialog = () => {
   displayVideoDialog.value = false
-  currentFrame.value = null
   selectedCamera.value = null
-  
+  currentFrame.value = null
+
   if (ws) {
     ws.close()
     ws = null
+  }
+
+  if (lastBlobUrl) {
+    URL.revokeObjectURL(lastBlobUrl)
+    lastBlobUrl = null
   }
 }
 
@@ -202,6 +243,12 @@ onMounted(() => {
 onBeforeUnmount(() => {
   if (ws) {
     ws.close()
+    ws = null
+  }
+
+  if (lastBlobUrl) {
+    URL.revokeObjectURL(lastBlobUrl)
+    lastBlobUrl = null
   }
 })
 </script>
