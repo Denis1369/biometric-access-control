@@ -1,16 +1,30 @@
 import apiClient from './client'
 
 export const camerasApi = {
-  getCameras(skip = 0, limit = 100) {
-    return apiClient.get(`/cameras/?skip=${skip}&limit=${limit}`)
+  getCameras({ buildingId = null, floorId = null } = {}) {
+    const params = new URLSearchParams()
+
+    if (buildingId !== null && buildingId !== undefined && buildingId !== '') {
+      params.set('building_id', String(buildingId))
+    }
+    if (floorId !== null && floorId !== undefined && floorId !== '') {
+      params.set('floor_id', String(floorId))
+    }
+
+    const query = params.toString()
+    return apiClient.get(`/cameras/${query ? `?${query}` : ''}`)
   },
 
-  createCamera(data) {
-    return apiClient.post('/cameras/', data)
+  getCamera(id) {
+    return apiClient.get(`/cameras/${id}`)
   },
 
-  updateCamera(id, data) {
-    return apiClient.patch(`/cameras/${id}`, data)
+  createCamera(payload) {
+    return apiClient.post('/cameras/', payload)
+  },
+
+  updateCamera(id, payload) {
+    return apiClient.patch(`/cameras/${id}`, payload)
   },
 
   deleteCamera(id) {

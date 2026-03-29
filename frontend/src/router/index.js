@@ -1,5 +1,4 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import Dashboard from '../views/Dashboard.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -7,7 +6,7 @@ const router = createRouter({
     {
       path: '/',
       name: 'dashboard',
-      component: Dashboard
+      component: () => import('../views/Dashboard.vue')
     },
     {
       path: '/employees',
@@ -23,6 +22,11 @@ const router = createRouter({
       path: '/route',
       name: 'route',
       component: () => import('../views/Route.vue')
+    },
+    {
+      path: '/tracking',
+      name: 'tracking',
+      component: () => import('../views/Tracking.vue')
     }
   ]
 })

@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import SQLModel
 
 from app.core.database import engine
-from app.api import employees, departments, cameras, analytics, websockets
+from app.api import employees, departments, cameras, analytics, websockets, buildings, floors
 
 
 @asynccontextmanager
@@ -31,6 +31,8 @@ app.include_router(departments.router)
 app.include_router(cameras.router)
 app.include_router(websockets.router)
 app.include_router(analytics.router)
+app.include_router(buildings.router)
+app.include_router(floors.router)
 
 @app.get("/")
 def root():
