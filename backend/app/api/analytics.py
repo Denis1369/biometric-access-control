@@ -51,6 +51,7 @@ def get_access_logs(session: Session = Depends(get_session), skip: int = 0, limi
         select(AccessLog, Employee, Camera)
         .join(Employee, AccessLog.employee_id == Employee.id, isouter=True)
         .join(Camera, AccessLog.camera_id == Camera.id, isouter=True)
+        .where(AccessLog.status == "granted")
         .order_by(AccessLog.timestamp.desc())
         .offset(skip)
         .limit(limit)

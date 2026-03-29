@@ -1,44 +1,84 @@
-import io
+import os
+import platform
+import threading
+
 import cv2
 import numpy as np
-from PIL import Image, ImageOps
-from fastapi import HTTPException, status
+import onnxruntime as ort
 from insightface.app import FaceAnalysis
 
-face_app = FaceAnalysis(
-    name="buffalo_l",
-    providers=["CPUExecutionProvider"]
-)
-face_app.prepare(ctx_id=0, det_size=(640, 640))
+
+_face_app = None
+_face_app_init_lock = threading.Lock()
+_face_app_infer_lock = threading.Lock()
+
+
+def _choose_providers() -> list[str]:
+    available = set(ort.get_available_providers())
+
+    if platform.system() == "Windows" and "DmlExecutionProvider" in available:
+        return ["DmlExecutionProvider", "CPUExecutionProvider"]
+
+    if "CUDAExecutionProvider" in available:
+        return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+    return ["CPUExecutionProvider"]
+
+
+def _build_face_app() -> FaceAnalysis:
+    providers = _choose_providers()
+    app = FaceAnalysis(name="buffalo_l", providers=providers)
+
+    # ctx_id=0 для GPU, -1 для CPU
+    ctx_id = -1 if providers == ["CPUExecutionProvider"] else 0
+    app.prepare(ctx_id=ctx_id, det_size=(640, 640))
+
+    print("InsightFace providers:", providers)
+    print("ORT available providers:", ort.get_available_providers())
+
+    return app
+
+
+def get_face_app() -> FaceAnalysis:
+    global _face_app
+    if _face_app is None:
+        with _face_app_init_lock:
+            if _face_app is None:
+                _face_app = _build_face_app()
+    return _face_app
+
+
+def decode_image_bytes(image_bytes: bytes) -> np.ndarray:
+    np_arr = np.frombuffer(image_bytes, dtype=np.uint8)
+    image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+    if image is None:
+        raise ValueError("Не удалось декодировать изображение")
+    return image
 
 
 def extract_face_encoding(image_bytes: bytes) -> list[float]:
-    try:
-        pil_img = Image.open(io.BytesIO(image_bytes))
-        pil_img = ImageOps.exif_transpose(pil_img).convert("RGB")
-        img = np.array(pil_img)
-        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Не удалось прочитать изображение: {str(e)}"
-        )
+    image = decode_image_bytes(image_bytes)
+    app = get_face_app()
 
-    faces = face_app.get(img)
+    with _face_app_infer_lock:
+        faces = app.get(image)
 
-    if len(faces) == 0:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Лицо не найдено на фотографии."
-        )
+    if not faces:
+        raise ValueError("Лицо не найдено")
 
-    if len(faces) > 1:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="На фотографии найдено несколько лиц. Загрузите фото с одним человеком."
-        )
+    best_face = max(
+        faces,
+        key=lambda face: float((face.bbox[2] - face.bbox[0]) * (face.bbox[3] - face.bbox[1]))
+    )
 
-    face = faces[0]
+    emb = getattr(best_face, "normed_embedding", None)
+    if emb is None:
+        emb = np.asarray(best_face.embedding, dtype=np.float32)
+        norm = np.linalg.norm(emb)
+        if norm == 0:
+            raise ValueError("Получен нулевой embedding")
+        emb = emb / norm
+    else:
+        emb = np.asarray(emb, dtype=np.float32)
 
-    embedding = face.normed_embedding.tolist()
-    return embedding
+    return emb.tolist()
