@@ -31,10 +31,10 @@ class Floor(SQLModel, table=True):
     )
 
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=datetime.now,
         sa_column=Column(DateTime, nullable=False)
     )
     updated_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=datetime.now,
         sa_column=Column(DateTime, nullable=False)
     )

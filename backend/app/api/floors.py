@@ -212,7 +212,7 @@ async def update_floor(
         floor.plan_image = plan_bytes
         floor.plan_mime_type = plan.content_type or "image/png"
 
-    floor.updated_at = datetime.utcnow()
+    floor.updated_at = datetime.now()
 
     try:
         session.add(floor)

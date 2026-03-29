@@ -114,7 +114,6 @@ def find_matching_employee_multi_frame(
             "decision": decision,
         })
 
-    # 1) Если есть хотя бы один очень сильный кадр -> сразу пускаем
     auto_allow_candidates = [
         fr for fr in frame_results
         if fr["employee_id"] is not None

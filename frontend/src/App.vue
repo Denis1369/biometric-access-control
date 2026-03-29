@@ -9,8 +9,9 @@
         <RouterLink to="/" class="nav-link"><i class="pi pi-home"></i> Дашборд</RouterLink>
         <RouterLink to="/employees" class="nav-link"><i class="pi pi-users"></i> Сотрудники</RouterLink>
         <RouterLink to="/cameras" class="nav-link"><i class="pi pi-video"></i> Камеры</RouterLink>
-        <RouterLink to="/route" class="nav-link"><i class="pi pi-map"></i> Проходная</RouterLink>
+        <RouterLink to="/route" class="nav-link"><i class="pi pi-sign-in"></i> Проходная</RouterLink>
         <RouterLink to="/tracking" class="nav-link"><i class="pi pi-map"></i> План здания</RouterLink>
+        <RouterLink to="/departments" class="nav-link" active-class="active"><i class="pi pi-sitemap"></i> Отделы</RouterLink>
       </nav>
     </aside>
 

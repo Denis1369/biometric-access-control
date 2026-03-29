@@ -11,6 +11,6 @@ class Building(SQLModel, table=True):
     address: str | None = Field(default=None)
 
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=datetime.now,
         sa_column=Column(DateTime, nullable=False)
     )

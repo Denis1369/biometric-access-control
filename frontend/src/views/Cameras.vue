@@ -21,9 +21,9 @@
       <Column header="Действия">
         <template #body="slotProps">
           <div class="action-buttons">
-            <button 
-              v-if="slotProps.data.is_active" 
-              class="btn-icon success" 
+            <button
+              v-if="slotProps.data.is_active"
+              class="btn-icon success"
               @click="openVideoDialog(slotProps.data)"
               title="Смотреть трансляцию"
             >
@@ -43,15 +43,25 @@
     <div v-if="displayDialog" class="modal-overlay">
       <div class="modal-content">
         <h2>{{ isEditMode ? 'Редактировать камеру' : 'Новая камера' }}</h2>
-        
+
         <div class="form-group">
           <label>Название зоны / камеры *</label>
-          <input type="text" v-model="cameraForm.name" class="form-input" placeholder="Например: Главный вход" />
+          <input
+            type="text"
+            v-model="cameraForm.name"
+            class="form-input"
+            placeholder="Например: Главный вход"
+          />
         </div>
-        
+
         <div class="form-group">
           <label>IP или RTSP адрес *</label>
-          <input type="text" v-model="cameraForm.ip_address" class="form-input" placeholder="rtsp://admin:123@192.168.1.10..." />
+          <input
+            type="text"
+            v-model="cameraForm.ip_address"
+            class="form-input"
+            placeholder="rtsp://admin:123@192.168.1.10..."
+          />
         </div>
 
         <div class="form-group checkbox-group">
@@ -74,12 +84,18 @@
             <i class="pi pi-times"></i>
           </button>
         </div>
-        
+
         <div class="video-container">
           <img v-if="currentFrame" :src="currentFrame" alt="Live stream" class="live-video" />
+
+          <div v-else-if="videoError" class="video-placeholder video-error">
+            <i class="pi pi-exclamation-triangle"></i>
+            <p>{{ videoError }}</p>
+          </div>
+
           <div v-else class="video-placeholder">
             <i class="pi pi-spin pi-spinner"></i>
-            <p>Подключение к потоку...</p>
+            <p>{{ isVideoLoading ? 'Подключение к потоку...' : 'Ожидание видео...' }}</p>
           </div>
         </div>
       </div>
@@ -106,9 +122,59 @@ const cameraForm = ref({
   is_active: true
 })
 
+const currentFrame = ref(null)
+const isVideoLoading = ref(false)
+const videoError = ref('')
+
 let ws = null
 let lastBlobUrl = null
-const currentFrame = ref(null)
+let connectionTimer = null
+let wsSession = 0
+let manualVideoClose = false
+
+const clearConnectionTimer = () => {
+  if (connectionTimer) {
+    clearTimeout(connectionTimer)
+    connectionTimer = null
+  }
+}
+
+const revokeLastBlob = () => {
+  if (lastBlobUrl) {
+    URL.revokeObjectURL(lastBlobUrl)
+    lastBlobUrl = null
+  }
+}
+
+const resetVideoState = () => {
+  currentFrame.value = null
+  isVideoLoading.value = false
+  videoError.value = ''
+}
+
+const cleanupVideoSocket = ({ closeSocket = true } = {}) => {
+  clearConnectionTimer()
+
+  if (ws) {
+    const socket = ws
+    ws = null
+
+    socket.onopen = null
+    socket.onmessage = null
+    socket.onerror = null
+    socket.onclose = null
+
+    if (closeSocket && (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN)) {
+      try {
+        socket.close(1000, 'client_closed')
+      } catch (error) {
+        console.error('Ошибка закрытия сокета', error)
+      }
+    }
+  }
+
+  revokeLastBlob()
+}
 
 const loadData = async () => {
   try {
@@ -173,67 +239,81 @@ const confirmDelete = async (id) => {
 }
 
 const openVideoDialog = (camera) => {
-  if (ws) {
-    ws.close()
-    ws = null
-  }
-
-  if (lastBlobUrl) {
-    URL.revokeObjectURL(lastBlobUrl)
-    lastBlobUrl = null
-  }
+  manualVideoClose = false
+  cleanupVideoSocket()
+  resetVideoState()
 
   selectedCamera.value = camera
   displayVideoDialog.value = true
-  currentFrame.value = null
+  isVideoLoading.value = true
 
+  const currentSession = ++wsSession
   const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
   const apiHost = `${window.location.hostname}:8000`
-  ws = new WebSocket(`${wsProtocol}://${apiHost}/ws/video/${camera.id}`)
+  const socket = new WebSocket(`${wsProtocol}://${apiHost}/ws/video/${camera.id}`)
 
-  ws.binaryType = 'blob'
+  ws = socket
+  socket.binaryType = 'blob'
 
-  ws.onopen = () => {
+  connectionTimer = setTimeout(() => {
+    if (ws !== socket || currentSession !== wsSession) return
+
+    videoError.value = 'Не удалось подключиться к потоку'
+    isVideoLoading.value = false
+    cleanupVideoSocket()
+  }, 5000)
+
+  socket.onopen = () => {
+    if (ws !== socket || currentSession !== wsSession) return
     console.log('WS opened', camera.id)
   }
 
-  ws.onmessage = (event) => {
-    if (lastBlobUrl) {
-      URL.revokeObjectURL(lastBlobUrl)
-    }
+  socket.onmessage = (event) => {
+    if (ws !== socket || currentSession !== wsSession) return
 
+    clearConnectionTimer()
+    isVideoLoading.value = false
+    videoError.value = ''
+
+    revokeLastBlob()
     lastBlobUrl = URL.createObjectURL(event.data)
     currentFrame.value = lastBlobUrl
   }
 
-  ws.onerror = (event) => {
+  socket.onerror = (event) => {
+    if (ws !== socket || currentSession !== wsSession) return
+
+    clearConnectionTimer()
+    isVideoLoading.value = false
+    videoError.value = 'Ошибка подключения к потоку'
     console.error('WS error', event)
   }
 
-  ws.onclose = (event) => {
+  socket.onclose = (event) => {
+    if (ws !== socket || currentSession !== wsSession) return
+
+    ws = null
+    clearConnectionTimer()
+    revokeLastBlob()
+    currentFrame.value = null
+    isVideoLoading.value = false
+
     console.log('WS closed', event.code, event.reason)
 
-    if (displayVideoDialog.value) {
-      alert(`Поток закрыт: ${event.code} ${event.reason || ''}`)
-      closeVideoDialog()
+    if (displayVideoDialog.value && !manualVideoClose) {
+      videoError.value = event.reason
+        ? `Поток закрыт: ${event.reason}`
+        : `Поток закрыт (код ${event.code})`
     }
   }
 }
 
 const closeVideoDialog = () => {
+  manualVideoClose = true
   displayVideoDialog.value = false
   selectedCamera.value = null
-  currentFrame.value = null
-
-  if (ws) {
-    ws.close()
-    ws = null
-  }
-
-  if (lastBlobUrl) {
-    URL.revokeObjectURL(lastBlobUrl)
-    lastBlobUrl = null
-  }
+  resetVideoState()
+  cleanupVideoSocket()
 }
 
 onMounted(() => {
@@ -241,15 +321,8 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
-  if (ws) {
-    ws.close()
-    ws = null
-  }
-
-  if (lastBlobUrl) {
-    URL.revokeObjectURL(lastBlobUrl)
-    lastBlobUrl = null
-  }
+  manualVideoClose = true
+  cleanupVideoSocket()
 })
 </script>
 
@@ -330,7 +403,10 @@ onBeforeUnmount(() => {
 
 .modal-overlay {
   position: fixed;
-  top: 0; left: 0; right: 0; bottom: 0;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
   background: rgba(15, 23, 42, 0.5);
   display: flex;
   align-items: center;
@@ -389,6 +465,12 @@ onBeforeUnmount(() => {
   flex-direction: column;
   align-items: center;
   gap: 1rem;
+  text-align: center;
+  padding: 1rem;
+}
+
+.video-error {
+  color: #fca5a5;
 }
 
 .form-group {
