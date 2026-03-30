@@ -16,6 +16,7 @@ class CameraCreate(SQLModel):
     name: str = Field(min_length=1)
     ip_address: str = Field(min_length=1)
     is_active: bool = True
+    direction: str = "internal"
     building_id: int | None = None
     floor_id: int | None = None
     plan_x: float | None = None
@@ -26,6 +27,7 @@ class CameraUpdate(SQLModel):
     name: str | None = None
     ip_address: str | None = None
     is_active: bool | None = None
+    direction: str | None = None
     building_id: int | None = None
     floor_id: int | None = None
     plan_x: float | None = None
@@ -37,6 +39,7 @@ class CameraRead(SQLModel):
     name: str
     ip_address: str
     is_active: bool
+    direction: str | None = None
     building_id: int | None = None
     floor_id: int | None = None
     plan_x: float | None = None
@@ -118,6 +121,7 @@ def get_cameras(
                 name=camera.name,
                 ip_address=camera.ip_address,
                 is_active=camera.is_active,
+                direction=camera.direction,
                 building_id=camera.building_id,
                 floor_id=camera.floor_id,
                 plan_x=camera.plan_x,
@@ -156,6 +160,7 @@ def get_camera(camera_id: int, session: Session = Depends(get_session)):
         name=camera.name,
         ip_address=camera.ip_address,
         is_active=camera.is_active,
+        direction=camera.direction,
         building_id=camera.building_id,
         floor_id=camera.floor_id,
         plan_x=camera.plan_x,
@@ -180,6 +185,7 @@ def create_camera(payload: CameraCreate, session: Session = Depends(get_session)
         name=payload.name.strip(),
         ip_address=payload.ip_address.strip(),
         is_active=payload.is_active,
+        direction=payload.direction,
         building_id=building_id,
         floor_id=floor_id,
         plan_x=payload.plan_x,
@@ -227,6 +233,8 @@ def update_camera(
         camera.ip_address = payload.ip_address.strip()
     if payload.is_active is not None:
         camera.is_active = payload.is_active
+    if payload.direction is not None:
+        camera.direction = payload.direction
 
     camera.building_id = next_building_id
     camera.floor_id = next_floor_id

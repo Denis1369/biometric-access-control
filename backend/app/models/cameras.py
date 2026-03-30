@@ -14,3 +14,5 @@ class Camera(SQLModel, table=True):
 
     plan_x: float | None = Field(default=None)
     plan_y: float | None = Field(default=None)
+
+    direction: str = Field(default="in")

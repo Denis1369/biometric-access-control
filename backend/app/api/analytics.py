@@ -62,7 +62,6 @@ def get_access_logs(session: Session = Depends(get_session), skip: int = 0, limi
                 camera_name=camera.name if camera else "Удаленная камера"
             )
         )
-        
     return response_data
 
 @router.get("/tracking-logs", response_model=List[TrackingLogResponse])
@@ -77,11 +76,9 @@ def get_tracking_logs(session: Session = Depends(get_session), skip: int = 0, li
     )
     
     results = session.exec(statement).all()
-    
     response_data = []
     for tracking_log, employee, camera in results:
         full_name = f"{employee.last_name} {employee.first_name}" if employee else "Неизвестный"
-        
         response_data.append(
             TrackingLogResponse(
                 id=tracking_log.id,
@@ -91,18 +88,24 @@ def get_tracking_logs(session: Session = Depends(get_session), skip: int = 0, li
                 camera_name=camera.name if camera else "Неизвестно"
             )
         )
-        
     return response_data
 
 @router.get("/stats", response_model=DashboardStatsResponse)
-def get_dashboard_stats(session: Session = Depends(get_session)):
+def get_dashboard_stats(target_date: str | None = None, session: Session = Depends(get_session)):
     total_employees = session.exec(select(func.count(Employee.id))).one()
     active_cameras = session.exec(select(func.count(Camera.id)).where(Camera.is_active == True)).one()
     
-    today = date.today()
+    if target_date:
+        try:
+            query_date = datetime.strptime(target_date, "%Y-%m-%d").date()
+        except ValueError:
+            query_date = date.today()
+    else:
+        query_date = date.today()
+
     accesses_today = session.exec(
         select(func.count(AccessLog.id))
-        .where(func.date(AccessLog.timestamp) == today)
+        .where(func.date(AccessLog.timestamp) == query_date)
     ).one()
     
     return DashboardStatsResponse(
@@ -112,16 +115,21 @@ def get_dashboard_stats(session: Session = Depends(get_session)):
     )
 
 @router.get("/daily-chart")
-def get_daily_chart(session: Session = Depends(get_session)):
-    """График проходов за сегодня с группировкой по часам."""
-    today = date.today()
-    
+def get_daily_chart(target_date: str | None = None, session: Session = Depends(get_session)):
+    if target_date:
+        try:
+            query_date = datetime.strptime(target_date, "%Y-%m-%d").date()
+        except ValueError:
+            query_date = date.today()
+    else:
+        query_date = date.today()
+
     statement = (
         select(
             func.extract('hour', AccessLog.timestamp).label('hour'),
             func.count(AccessLog.id).label('count')
         )
-        .where(func.date(AccessLog.timestamp) == today)
+        .where(func.date(AccessLog.timestamp) == query_date)
         .group_by(func.extract('hour', AccessLog.timestamp))
         .order_by(func.extract('hour', AccessLog.timestamp))
     )
@@ -136,14 +144,9 @@ def get_daily_chart(session: Session = Depends(get_session)):
 
 @router.get("/monthly-department-chart")
 def get_monthly_department_chart(session: Session = Depends(get_session)):
-    """График проходов за текущий месяц с группировкой по отделам."""
     today = date.today()
-    
     statement = (
-        select(
-            Department.name,
-            func.count(AccessLog.id).label('count')
-        )
+        select(Department.name, func.count(AccessLog.id).label('count'))
         .join(Employee, AccessLog.employee_id == Employee.id)
         .join(Department, Employee.department_id == Department.id)
         .where(func.extract('month', AccessLog.timestamp) == today.month)
@@ -151,60 +154,47 @@ def get_monthly_department_chart(session: Session = Depends(get_session)):
         .group_by(Department.name)
     )
     results = session.exec(statement).all()
-    
-    labels = []
-    data = []
-    for row in results:
-        labels.append(row.name)
-        data.append(row.count)
-        
-    return {"labels": labels, "data": data}
+    return {"labels": [r.name for r in results], "data": [r.count for r in results]}
 
 @router.get("/monthly-days-chart")
 def get_monthly_days_chart(session: Session = Depends(get_session)):
-    """График проходов по дням за текущий месяц."""
     today = date.today()
     _, num_days = monthrange(today.year, today.month)
-    
     statement = (
-        select(
-            func.extract('day', AccessLog.timestamp).label('day'),
-            func.count(AccessLog.id).label('count')
-        )
+        select(func.extract('day', AccessLog.timestamp).label('day'), func.count(AccessLog.id).label('count'))
         .where(func.extract('month', AccessLog.timestamp) == today.month)
         .where(func.extract('year', AccessLog.timestamp) == today.year)
         .group_by(func.extract('day', AccessLog.timestamp))
         .order_by(func.extract('day', AccessLog.timestamp))
     )
     results = session.exec(statement).all()
-    
     data_dict = {str(i): 0 for i in range(1, num_days + 1)}
     for row in results:
-        day = int(row.day)
-        data_dict[str(day)] = row.count
-        
+        data_dict[str(int(row.day))] = row.count
     return {"labels": list(data_dict.keys()), "data": list(data_dict.values())}
 
 @router.get("/presence")
-def get_presence(session: Session = Depends(get_session)):
-    """Процент присутствия сотрудников на рабочем месте сегодня."""
-    today = date.today()
+def get_presence(target_date: str | None = None, session: Session = Depends(get_session)):
+    if target_date:
+        try:
+            query_date = datetime.strptime(target_date, "%Y-%m-%d").date()
+        except ValueError:
+            query_date = date.today()
+    else:
+        query_date = date.today()
+
     total_active = session.exec(select(func.count(Employee.id)).where(Employee.is_active == True)).one()
-    
-    statement = (
+    present = session.exec(
         select(func.count(func.distinct(AccessLog.employee_id)))
-        .where(func.date(AccessLog.timestamp) == today)
+        .where(func.date(AccessLog.timestamp) == query_date)
         .where(AccessLog.status == 'granted')
         .where(AccessLog.employee_id != None)
-    )
-    present = session.exec(statement).one()
-    
+    ).one()
     percentage = int((present / total_active * 100)) if total_active > 0 else 0
     return {"present": present, "total": total_active, "percentage": percentage}
 
 @router.get("/camera-traffic")
 def get_camera_traffic(session: Session = Depends(get_session)):
-    """Загруженность точек прохода (камер) за текущий месяц."""
     today = date.today()
     statement = (
         select(Camera.name, func.count(AccessLog.id))
@@ -214,14 +204,94 @@ def get_camera_traffic(session: Session = Depends(get_session)):
         .group_by(Camera.name)
     )
     results = session.exec(statement).all()
+    return {"labels": [r[0] for r in results], "data": [r[1] for r in results]}
+
+@router.get("/daily-attendance")
+def get_daily_attendance(target_date: str | None = None, session: Session = Depends(get_session)):
+    if target_date:
+        try:
+            query_date = datetime.strptime(target_date, "%Y-%m-%d").date()
+        except ValueError:
+            query_date = date.today()
+    else:
+        latest_log = session.exec(
+            select(AccessLog)
+            .where(AccessLog.employee_id != None)
+            .order_by(AccessLog.timestamp.desc())
+        ).first()
+        
+        if not latest_log:
+            return {"date": date.today().strftime("%Y-%m-%d"), "data": []}
+            
+        query_date = latest_log.timestamp.date()
+    
+    statement = (
+        select(AccessLog, Employee, Department, Camera)
+        .join(Employee, AccessLog.employee_id == Employee.id)
+        .join(Department, Employee.department_id == Department.id)
+        .join(Camera, AccessLog.camera_id == Camera.id)
+        .where(func.date(AccessLog.timestamp) == query_date)
+        .where(AccessLog.status == 'granted')
+    )
+    logs = session.exec(statement).all()
+    
+    emp_data = {}
+    for log, emp, dept, cam in logs:
+        if emp.id not in emp_data:
+            emp_data[emp.id] = {
+                "name": f"{emp.last_name} {emp.first_name[0]}.",
+                "dept_name": dept.name,
+                "work_start": dept.work_start,
+                "work_end": dept.work_end,
+                "arrival": None,
+                "departure": None,
+                "any_seen": log.timestamp 
+            }
+        
+        if cam.direction in ['in', 'both']:
+            if emp_data[emp.id]["arrival"] is None or log.timestamp < emp_data[emp.id]["arrival"]:
+                emp_data[emp.id]["arrival"] = log.timestamp
+                
+        if cam.direction in ['out', 'both']:
+            if emp_data[emp.id]["departure"] is None or log.timestamp > emp_data[emp.id]["departure"]:
+                emp_data[emp.id]["departure"] = log.timestamp
+        
+        if log.timestamp < emp_data[emp.id]["any_seen"]:
+            emp_data[emp.id]["any_seen"] = log.timestamp
+                
+    result = []
+    for eid, data in emp_data.items():
+        arr = data["arrival"] or data["departure"] or data["any_seen"]
+        dep = data["departure"] or data["arrival"] or data["any_seen"]
+        
+        first_time = arr.time()
+        last_time = dep.time()
+        
+        is_late = first_time > data["work_start"]
+        is_left_early = last_time < data["work_end"]
+        
+        result.append({
+            "employee": data["name"],
+            "department": data["dept_name"],
+            "arrival": arr.strftime("%H:%M"),
+            "departure": dep.strftime("%H:%M"),
+            "arrival_dec": first_time.hour + first_time.minute / 60.0,
+            "departure_dec": last_time.hour + last_time.minute / 60.0,
+            "is_late": is_late,
+            "is_left_early": is_left_early,
+            "work_start": data["work_start"].strftime("%H:%M"),
+            "work_end": data["work_end"].strftime("%H:%M")
+        })
+        
+    result.sort(key=lambda x: x["arrival_dec"])
+    
     return {
-        "labels": [r[0] for r in results],
-        "data": [r[1] for r in results]
+        "date": query_date.strftime("%Y-%m-%d"),
+        "data": result
     }
 
 @router.get("/discipline")
 def get_discipline_stats(session: Session = Depends(get_session)):
-    """Статистика опозданий по отделам с детализацией по сотрудникам (Drill-down)."""
     today = date.today()
     
     employees_data = session.exec(select(Employee, Department).join(Department)).all()
@@ -244,15 +314,20 @@ def get_discipline_stats(session: Session = Depends(get_session)):
             "work_start": dept.work_start
         }
         
-    statement = select(AccessLog).where(
-        func.extract('month', AccessLog.timestamp) == today.month,
-        func.extract('year', AccessLog.timestamp) == today.year,
-        AccessLog.status == 'granted'
+    statement = (
+        select(AccessLog, Camera)
+        .join(Camera, AccessLog.camera_id == Camera.id)
+        .where(
+            func.extract('month', AccessLog.timestamp) == today.month,
+            func.extract('year', AccessLog.timestamp) == today.year,
+            AccessLog.status == 'granted',
+            Camera.direction.in_(['in', 'both'])
+        )
     )
     logs = session.exec(statement).all()
     
     first_arrivals = {}
-    for log in logs:
+    for log, cam in logs:
         if log.employee_id is None: continue
         log_date = log.timestamp.date()
         key = (log.employee_id, log_date)
