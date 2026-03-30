@@ -8,6 +8,7 @@ from app.core.database import get_session
 from app.models.buildings import Building
 from app.models.cameras import Camera
 from app.models.floors import Floor
+from app.services.stream_manager import stream_manager
 
 router = APIRouter(prefix="/api/cameras", tags=["Камеры"])
 
@@ -196,6 +197,10 @@ def create_camera(payload: CameraCreate, session: Session = Depends(get_session)
         session.add(camera)
         session.commit()
         session.refresh(camera)
+
+        if camera.is_active:
+            stream_manager.add_camera(camera.id, camera.ip_address, camera.direction)
+            
         return camera
     except IntegrityError:
         session.rollback()
@@ -259,6 +264,12 @@ def update_camera(
         session.add(camera)
         session.commit()
         session.refresh(camera)
+
+        if camera.is_active:
+            stream_manager.add_camera(camera.id, camera.ip_address, camera.direction)
+        else:
+            stream_manager.remove_camera(camera.id)
+            
         return camera
     except IntegrityError:
         session.rollback()
@@ -284,4 +295,7 @@ def delete_camera(camera_id: int, session: Session = Depends(get_session)):
 
     session.delete(camera)
     session.commit()
+
+    stream_manager.remove_camera(camera_id)
+    
     return None

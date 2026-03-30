@@ -7,10 +7,18 @@ from app.core.database import engine
 from app.api import employees, departments, cameras, analytics, websockets, buildings, floors
 
 
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
+from app.services.stream_manager import stream_manager
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    SQLModel.metadata.create_all(engine)
+    print("Запуск фонового анализа видеопотоков...")
+    stream_manager.start_all()
     yield
+    print("Остановка потоков...")
+    for cam_id in list(stream_manager.workers.keys()):
+        stream_manager.remove_camera(cam_id)
 
 app = FastAPI(
     title="Biometric Access Control API", 
