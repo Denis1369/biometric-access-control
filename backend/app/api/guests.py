@@ -6,6 +6,7 @@ from sqlmodel import Session, SQLModel, select
 
 from app.core.database import get_session
 from app.models.guests import Guest, GuestFaceSample
+from app.models.employees import Employee
 from app.services.photo_conversion import extract_face_encoding
 
 router = APIRouter(prefix="/api/guests", tags=["Гости"])
@@ -15,38 +16,55 @@ class GuestRead(SQLModel):
     last_name: str
     first_name: str
     middle_name: str | None = None
-    purpose: str | None = None
+    employee_id: int | None = None
+    employee_name: str | None = None
     valid_until: datetime
     is_active: bool
     photo_id: int | None = None
 
+
+def build_employee_name(employee: Employee | None) -> str | None:
+    if not employee:
+        return None
+    full_name = " ".join(
+        part for part in [employee.last_name, employee.first_name, employee.middle_name] if part
+    ).strip()
+    return full_name or None
+
+
+def build_guest_read(session: Session, guest: Guest) -> GuestRead:
+    sample = session.exec(select(GuestFaceSample).where(GuestFaceSample.guest_id == guest.id)).first()
+    employee = session.get(Employee, guest.employee_id) if guest.employee_id else None
+    return GuestRead(
+        **guest.model_dump(),
+        employee_name=build_employee_name(employee),
+        photo_id=sample.id if sample else None
+    )
+
 @router.get("/", response_model=List[GuestRead])
 def get_guests(session: Session = Depends(get_session)):
     guests = session.exec(select(Guest).order_by(Guest.id.desc())).all()
-    result = []
-    for g in guests:
-        sample = session.exec(select(GuestFaceSample).where(GuestFaceSample.guest_id == g.id)).first()
-        result.append(GuestRead(
-            **g.model_dump(),
-            photo_id=sample.id if sample else None
-        ))
-    return result
+    return [build_guest_read(session, guest) for guest in guests]
 
 @router.post("/", response_model=GuestRead, status_code=status.HTTP_201_CREATED)
 async def create_guest(
     last_name: str = Form(...),
     first_name: str = Form(...),
     middle_name: str | None = Form(None),
-    purpose: str | None = Form(None),
+    employee_id: int = Form(...),
     valid_until: datetime = Form(...),
     photo: UploadFile = File(...),
     session: Session = Depends(get_session)
 ):
+    employee = session.get(Employee, employee_id)
+    if not employee:
+        raise HTTPException(status_code=400, detail=f"Сотрудник с id={employee_id} не найден")
+
     guest = Guest(
         last_name=last_name.strip(),
         first_name=first_name.strip(),
         middle_name=middle_name.strip() if middle_name else None,
-        purpose=purpose.strip() if purpose else None,
+        employee_id=employee_id,
         valid_until=valid_until,
         is_active=True
     )
@@ -74,7 +92,7 @@ async def create_guest(
         session.commit()
         session.refresh(guest)
 
-        return GuestRead(**guest.model_dump(), photo_id=sample.id)
+        return build_guest_read(session, guest)
 
     except Exception as e:
         session.rollback()

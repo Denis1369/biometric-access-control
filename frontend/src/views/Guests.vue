@@ -13,13 +13,13 @@
     <div class="filters-bar">
       <div class="search-box">
         <i class="pi pi-search"></i>
-        <input type="text" v-model="searchQuery" placeholder="Поиск по ФИО или цели визита..." />
+        <input type="text" v-model="searchQuery" placeholder="Поиск по ФИО гостя или сотрудника..." />
       </div>
 
       <select v-model="selectedStatus" class="filter-select">
         <option value="all">Все статусы</option>
         <option value="active">Только активные</option>
-        <option value="expired">Истекшие / Закрытые</option>
+        <option value="expired">Истекшие / закрытые</option>
       </select>
 
       <select v-model="sortBy" class="filter-select">
@@ -36,10 +36,10 @@
             {{ isPassValid(guest.valid_until, guest.is_active) ? 'ПРОПУСК АКТИВЕН' : 'ИСТЕК / ЗАКРЫТ' }}
           </div>
           <div class="card-actions">
-            <button 
-              v-if="isPassValid(guest.valid_until, guest.is_active)" 
-              class="btn-icon warning" 
-              @click="deactivateGuest(guest.id)" 
+            <button
+              v-if="isPassValid(guest.valid_until, guest.is_active)"
+              class="btn-icon warning"
+              @click="deactivateGuest(guest.id)"
               title="Аннулировать пропуск"
             >
               <i class="pi pi-ban"></i>
@@ -54,16 +54,18 @@
               <i class="pi pi-user"></i>
             </div>
           </div>
-          
+
           <h3 class="emp-name">{{ guest.last_name }} {{ guest.first_name }}</h3>
           <p class="emp-middle-name">{{ guest.middle_name || ' ' }}</p>
-          
+
           <div class="guest-info">
             <div class="info-row">
-              <i class="pi pi-briefcase"></i> <span>{{ guest.purpose || 'Без цели' }}</span>
+              <i class="pi pi-user"></i>
+              <span>{{ guest.employee_name || 'Сотрудник не указан' }}</span>
             </div>
-            <div class="info-row" :class="{ 'expired': !isPassValid(guest.valid_until, guest.is_active) }">
-              <i class="pi pi-clock"></i> <span>До: {{ formatDate(guest.valid_until) }}</span>
+            <div class="info-row" :class="{ expired: !isPassValid(guest.valid_until, guest.is_active) }">
+              <i class="pi pi-clock"></i>
+              <span>До: {{ formatDate(guest.valid_until) }}</span>
             </div>
           </div>
         </div>
@@ -102,14 +104,14 @@
                   {{ cam.name }}
                 </option>
               </select>
-              
+
               <button class="btn-primary full-width-btn" @click="takeSnapshot" :disabled="!selectedCameraId || isTakingSnapshot">
-                <i class="pi" :class="isTakingSnapshot ? 'pi-spin pi-spinner' : 'pi-camera'"></i> 
+                <i class="pi" :class="isTakingSnapshot ? 'pi-spin pi-spinner' : 'pi-camera'"></i>
                 Сделать снимок
               </button>
-              
+
               <div class="divider"><span>ИЛИ</span></div>
-              
+
               <button class="btn-text upload-btn full-width-btn" @click="$refs.fileInput.click()">
                 <i class="pi pi-upload"></i> Загрузить с ПК
               </button>
@@ -123,7 +125,7 @@
                 <label>Фамилия <span class="required">*</span></label>
                 <input v-model="guestForm.last_name" type="text" class="form-input" />
               </div>
-              
+
               <div class="form-group">
                 <label>Имя <span class="required">*</span></label>
                 <input v-model="guestForm.first_name" type="text" class="form-input" />
@@ -140,8 +142,44 @@
               </div>
 
               <div class="form-group full-width">
-                <label>Цель визита / К кому направляется</label>
-                <input v-model="guestForm.purpose" type="text" class="form-input" placeholder="Например: Собеседование в IT-отдел" />
+                <label>К кому пришли <span class="required">*</span></label>
+                <div class="employee-select">
+                  <button type="button" class="form-input employee-select-trigger" @click="toggleEmployeeDropdown">
+                    <span :class="{ 'placeholder-text': !selectedEmployeeName }">
+                      {{ selectedEmployeeName || 'Выберите сотрудника...' }}
+                    </span>
+                    <i class="pi" :class="employeeDropdownOpen ? 'pi-chevron-up' : 'pi-chevron-down'"></i>
+                  </button>
+
+                  <div v-if="employeeDropdownOpen" class="employee-select-panel">
+                    <div class="employee-search-box">
+                      <i class="pi pi-search"></i>
+                      <input
+                        v-model="employeeSearchQuery"
+                        type="text"
+                        class="employee-search-input"
+                        placeholder="Поиск по ФИО..."
+                      />
+                    </div>
+
+                    <div class="employee-options-list">
+                      <button
+                        v-for="employee in filteredEmployeeOptions"
+                        :key="employee.id"
+                        type="button"
+                        class="employee-option"
+                        :class="{ selected: String(guestForm.employee_id) === String(employee.id) }"
+                        @click="selectEmployee(employee)"
+                      >
+                        {{ getEmployeeFullName(employee) }}
+                      </button>
+
+                      <div v-if="filteredEmployeeOptions.length === 0" class="employee-option-empty">
+                        Сотрудники не найдены
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -160,18 +198,21 @@
 import { ref, onMounted, computed } from 'vue'
 import { guestsApi } from '../api/guests'
 import { camerasApi } from '../api/cameras'
+import { employeesApi } from '../api/employees'
 
 const guests = ref([])
 const cameras = ref([])
+const employees = ref([])
 
-// Новые переменные для фильтров
 const searchQuery = ref('')
-const selectedStatus = ref('active') // По умолчанию показываем активных
+const selectedStatus = ref('active')
 const sortBy = ref('newest')
 
 const displayDialog = ref(false)
 const isTakingSnapshot = ref(false)
 const selectedCameraId = ref('')
+const employeeDropdownOpen = ref(false)
+const employeeSearchQuery = ref('')
 
 const fileInput = ref(null)
 const photoPreview = ref(null)
@@ -180,42 +221,55 @@ const guestForm = ref({
   last_name: '',
   first_name: '',
   middle_name: '',
-  purpose: '',
+  employee_id: '',
   valid_until: '',
   photoFile: null
 })
 
 const loadData = async () => {
   try {
-    const camerasRes = await camerasApi.getCameras()
-    cameras.value = camerasRes.data
-  } catch (error) {
-    console.error('Ошибка загрузки камер:', error)
-  }
+    const [camerasRes, guestsRes, employeesRes] = await Promise.all([
+      camerasApi.getCameras(),
+      guestsApi.getGuests(),
+      employeesApi.getEmployees(0, 1000)
+    ])
 
-  try {
-    const guestsRes = await guestsApi.getGuests()
+    cameras.value = camerasRes.data
     guests.value = guestsRes.data
+    employees.value = employeesRes.data.filter(employee => employee.is_active)
   } catch (error) {
-    console.error('Ошибка загрузки гостей:', error)
+    console.error('Ошибка загрузки данных:', error)
   }
 }
 
 const activeCameras = computed(() => {
-  return cameras.value.filter(c => c.is_active)
+  return cameras.value.filter(camera => camera.is_active)
 })
 
-// === ОБНОВЛЕННАЯ ЛОГИКА ФИЛЬТРАЦИИ И СОРТИРОВКИ ===
-const filteredGuests = computed(() => {
-  // 1. Сначала фильтруем
-  let result = guests.value.filter(g => {
-    const query = searchQuery.value.toLowerCase()
-    const fullName = `${g.last_name} ${g.first_name} ${g.middle_name || ''}`.toLowerCase()
-    const purpose = (g.purpose || '').toLowerCase()
-    const matchesSearch = fullName.includes(query) || purpose.includes(query)
+const getEmployeeFullName = (employee) => {
+  return [employee.last_name, employee.first_name, employee.middle_name].filter(Boolean).join(' ')
+}
 
-    const isValid = isPassValid(g.valid_until, g.is_active)
-    
+const selectedEmployeeName = computed(() => {
+  const employee = employees.value.find(item => String(item.id) === String(guestForm.value.employee_id))
+  return employee ? getEmployeeFullName(employee) : ''
+})
+
+const filteredEmployeeOptions = computed(() => {
+  const query = employeeSearchQuery.value.trim().toLowerCase()
+  if (!query) return employees.value
+  return employees.value.filter(employee => getEmployeeFullName(employee).toLowerCase().includes(query))
+})
+
+const filteredGuests = computed(() => {
+  let result = guests.value.filter(guest => {
+    const query = searchQuery.value.toLowerCase()
+    const fullName = `${guest.last_name} ${guest.first_name} ${guest.middle_name || ''}`.toLowerCase()
+    const employeeName = (guest.employee_name || '').toLowerCase()
+    const matchesSearch = fullName.includes(query) || employeeName.includes(query)
+
+    const isValid = isPassValid(guest.valid_until, guest.is_active)
+
     let matchesStatus = true
     if (selectedStatus.value === 'active') matchesStatus = isValid
     if (selectedStatus.value === 'expired') matchesStatus = !isValid
@@ -223,13 +277,10 @@ const filteredGuests = computed(() => {
     return matchesSearch && matchesStatus
   })
 
-  // 2. Затем сортируем
   result.sort((a, b) => {
-    if (sortBy.value === 'newest') {
-      return b.id - a.id // Сортируем по ID (самые новые сверху)
-    } else if (sortBy.value === 'oldest') {
-      return a.id - b.id
-    } else if (sortBy.value === 'name') {
+    if (sortBy.value === 'newest') return b.id - a.id
+    if (sortBy.value === 'oldest') return a.id - b.id
+    if (sortBy.value === 'name') {
       const nameA = `${a.last_name} ${a.first_name}`.toLowerCase()
       const nameB = `${b.last_name} ${b.first_name}`.toLowerCase()
       return nameA.localeCompare(nameB)
@@ -240,22 +291,38 @@ const filteredGuests = computed(() => {
   return result
 })
 
-// Проверка срока годности: дата должна быть в будущем И пропуск не должен быть принудительно аннулирован
 const isPassValid = (dateString, isActive) => {
   if (isActive === false) return false
   return new Date(dateString) > new Date()
 }
 
 const formatDate = (dateString) => {
-  // Исправляем смещение UTC
   const d = new Date(dateString + 'Z')
-  return d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+  return d.toLocaleString('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  })
+}
+
+const toggleEmployeeDropdown = () => {
+  employeeDropdownOpen.value = !employeeDropdownOpen.value
+  if (!employeeDropdownOpen.value) employeeSearchQuery.value = ''
+}
+
+const selectEmployee = (employee) => {
+  guestForm.value.employee_id = String(employee.id)
+  employeeDropdownOpen.value = false
+  employeeSearchQuery.value = ''
 }
 
 const onFileSelected = (event) => {
   const file = event.target.files[0]
   if (file) {
     guestForm.value.photoFile = file
+    if (photoPreview.value) URL.revokeObjectURL(photoPreview.value)
     photoPreview.value = URL.createObjectURL(file)
   }
 }
@@ -266,9 +333,9 @@ const takeSnapshot = async () => {
   try {
     const res = await camerasApi.getSnapshot(selectedCameraId.value)
     const blob = res.data
-    const file = new File([blob], "snapshot.jpg", { type: "image/jpeg" })
+    const file = new File([blob], 'snapshot.jpg', { type: 'image/jpeg' })
     guestForm.value.photoFile = file
-    
+
     if (photoPreview.value) URL.revokeObjectURL(photoPreview.value)
     photoPreview.value = URL.createObjectURL(blob)
   } catch (error) {
@@ -279,34 +346,47 @@ const takeSnapshot = async () => {
 }
 
 const openNewDialog = () => {
-  photoPreview.value = null
+  if (photoPreview.value) {
+    URL.revokeObjectURL(photoPreview.value)
+    photoPreview.value = null
+  }
   if (fileInput.value) fileInput.value.value = ''
-  
+
   const today = new Date()
   today.setHours(23, 59, 0, 0)
-  const tzOffset = (new Date()).getTimezoneOffset() * 60000;
-  const localISOTime = (new Date(today - tzOffset)).toISOString().slice(0, 16);
+  const tzOffset = new Date().getTimezoneOffset() * 60000
+  const localISOTime = new Date(today - tzOffset).toISOString().slice(0, 16)
 
-  guestForm.value = { 
-    last_name: '', first_name: '', middle_name: '', purpose: '',
+  guestForm.value = {
+    last_name: '',
+    first_name: '',
+    middle_name: '',
+    employee_id: '',
     valid_until: localISOTime,
-    photoFile: null 
+    photoFile: null
   }
+  employeeDropdownOpen.value = false
+  employeeSearchQuery.value = ''
   displayDialog.value = true
 }
 
 const closeDialog = () => {
   displayDialog.value = false
-  if (photoPreview.value) URL.revokeObjectURL(photoPreview.value)
+  employeeDropdownOpen.value = false
+  employeeSearchQuery.value = ''
+  if (photoPreview.value) {
+    URL.revokeObjectURL(photoPreview.value)
+    photoPreview.value = null
+  }
 }
 
 const saveGuest = async () => {
-  if (!guestForm.value.last_name || !guestForm.value.first_name || !guestForm.value.valid_until) {
-    alert('Заполните обязательные поля (Фамилия, Имя, Срок действия)')
+  if (!guestForm.value.last_name || !guestForm.value.first_name || !guestForm.value.valid_until || !guestForm.value.employee_id) {
+    alert('Заполните обязательные поля: фамилия, имя, к кому пришли и срок действия')
     return
   }
   if (!guestForm.value.photoFile) {
-    alert('Сделайте снимок с камеры или загрузите фотографию гостя!')
+    alert('Сделайте снимок с камеры или загрузите фотографию гостя.')
     return
   }
 
@@ -315,11 +395,10 @@ const saveGuest = async () => {
     formData.append('last_name', guestForm.value.last_name)
     formData.append('first_name', guestForm.value.first_name)
     if (guestForm.value.middle_name) formData.append('middle_name', guestForm.value.middle_name)
-    if (guestForm.value.purpose) formData.append('purpose', guestForm.value.purpose)
-    
+    formData.append('employee_id', guestForm.value.employee_id)
+
     const validDate = new Date(guestForm.value.valid_until)
     formData.append('valid_until', validDate.toISOString())
-    
     formData.append('photo', guestForm.value.photoFile)
 
     await guestsApi.createGuest(formData)
@@ -331,7 +410,6 @@ const saveGuest = async () => {
   }
 }
 
-// === НОВАЯ ЛОГИКА АННУЛИРОВАНИЯ ===
 const deactivateGuest = async (id) => {
   if (confirm('Аннулировать пропуск? Гость больше не сможет пройти через турникет.')) {
     try {
@@ -360,7 +438,6 @@ onMounted(() => {
 .search-box input { width: 100%; padding: 0.75rem 1rem 0.75rem 2.5rem; border-radius: 8px; border: 1px solid #cbd5e1; background: #f8fafc; font-size: 0.95rem; outline: none; transition: 0.2s; }
 .search-box input:focus { border-color: #3b82f6; background: #ffffff; }
 
-/* Стили для селектов-фильтров */
 .filter-select { padding: 0.75rem 1rem; border-radius: 8px; border: 1px solid #cbd5e1; background: #f8fafc; color: #334155; font-size: 0.95rem; outline: none; min-width: 180px; cursor: pointer; }
 .filter-select:focus { border-color: #3b82f6; }
 
@@ -384,9 +461,9 @@ onMounted(() => {
 .emp-name { margin: 0 0 0.25rem 0; color: #0f172a; font-size: 1.15rem; font-weight: 700; }
 .emp-middle-name { margin: 0 0 1rem 0; color: #64748b; font-size: 0.9rem; min-height: 1.2rem; }
 
-.guest-info { width: 100%; display: flex; flex-direction: column; gap: 0.5rem; background: #f8fafc; padding: 0.75rem; border-radius: 8px; border: 1px solid #e2e8f0;}
+.guest-info { width: 100%; display: flex; flex-direction: column; gap: 0.5rem; background: #f8fafc; padding: 0.75rem; border-radius: 8px; border: 1px solid #e2e8f0; }
 .info-row { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: #475569; font-weight: 500; text-align: left; }
-.info-row i { color: #8b5cf6; font-size: 1rem; }
+.info-row i { color: #3b82f6; font-size: 1rem; }
 .info-row.expired { color: #ef4444; }
 .info-row.expired i { color: #ef4444; }
 
@@ -426,7 +503,94 @@ onMounted(() => {
 .required { color: #ef4444; }
 .form-input { width: 100%; box-sizing: border-box; padding: 0.75rem 1rem; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 0.95rem; background: #ffffff; outline: none; }
 .form-input:focus { border-color: #3b82f6; }
+.placeholder-text { color: #94a3b8; }
 
+.employee-select {
+  position: relative;
+}
+
+.employee-select-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  text-align: left;
+}
+
+.employee-select-panel {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.12);
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  max-height: min(200px, 45vh);
+  overflow: hidden;
+}
+
+.employee-search-box {
+  position: relative;
+  margin-bottom: 0.75rem;
+  flex-shrink: 0;
+}
+
+.employee-search-box i {
+  position: absolute;
+  left: 0.85rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #94a3b8;
+}
+
+.employee-search-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.7rem 0.9rem 0.7rem 2.4rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  font-size: 0.92rem;
+  outline: none;
+}
+
+.employee-search-input:focus {
+  border-color: #3b82f6;
+}
+
+.employee-options-list {
+  overflow-y: auto;
+  min-height: 0;
+  padding-right: 0.25rem;
+}
+
+.employee-option {
+  width: 100%;
+  border: none;
+  background: transparent;
+  text-align: left;
+  padding: 0.7rem 0.85rem;
+  border-radius: 8px;
+  cursor: pointer;
+  color: #334155;
+  font-size: 0.94rem;
+}
+
+.employee-option:hover,
+.employee-option.selected {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.employee-option-empty {
+  padding: 0.7rem 0.85rem;
+  color: #94a3b8;
+  font-size: 0.9rem;
+}
 .modal-actions { display: flex; justify-content: flex-end; gap: 1rem; margin-top: 2rem; border-top: 1px solid #e2e8f0; padding-top: 1.5rem; }
 
 .btn-primary, .btn-text { border: none; padding: 0.65rem 1.2rem; border-radius: 8px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem; transition: 0.2s; }

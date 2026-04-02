@@ -11,7 +11,7 @@ class Guest(SQLModel, table=True):
     last_name: str
     first_name: str
     middle_name: str | None = None
-    purpose: str | None = None
+    employee_id: int | None = Field(default=None, foreign_key="employees.id", index=True)
     valid_until: datetime
     is_active: bool = Field(default=True)
 

@@ -117,7 +117,33 @@
 
               <div class="form-group full-width">
                 <label>Цель визита / К кому направляется</label>
-                <input v-model="guestForm.purpose" type="text" class="form-input" placeholder="Например: Встреча в переговорной" />
+                <div class="employee-select">
+                  <button type="button" class="form-input employee-select-trigger" @click="toggleEmployeeDropdown">
+                    <span :class="{ 'placeholder-text': !selectedEmployeeName }">
+                      {{ selectedEmployeeName || 'Выберите сотрудника...' }}
+                    </span>
+                    <i class="pi" :class="employeeDropdownOpen ? 'pi-chevron-up' : 'pi-chevron-down'"></i>
+                  </button>
+                  <div v-if="employeeDropdownOpen" class="employee-select-panel">
+                    <div class="employee-search-box">
+                      <i class="pi pi-search"></i>
+                      <input v-model="employeeSearchQuery" type="text" class="employee-search-input" placeholder="Поиск по ФИО..." />
+                    </div>
+                    <button
+                      v-for="employee in filteredEmployeeOptions"
+                      :key="employee.id"
+                      type="button"
+                      class="employee-option"
+                      :class="{ selected: String(guestForm.employee_id) === String(employee.id) }"
+                      @click="selectEmployee(employee)"
+                    >
+                      {{ getEmployeeFullName(employee) }}
+                    </button>
+                    <div v-if="filteredEmployeeOptions.length === 0" class="employee-option-empty">
+                      Сотрудники не найдены
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -137,8 +163,10 @@ import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
 import { camerasApi } from '../api/cameras'
 import { analyticsApi } from '../api/analytics'
 import { guestsApi } from '../api/guests'
+import { employeesApi } from '../api/employees'
 
 const cameras = ref([])
+const employees = ref([])
 const selectedCameraId = ref('')
 
 const currentFrame = ref(null)
@@ -152,11 +180,32 @@ let ws = null
 const displayGuestDialog = ref(false)
 const isTakingSnapshot = ref(false)
 const photoPreview = ref(null)
+const employeeDropdownOpen = ref(false)
+const employeeSearchQuery = ref('')
 const guestForm = ref({
-  last_name: '', first_name: '', middle_name: '', purpose: '', valid_until: '', photoFile: null
+  last_name: '', first_name: '', middle_name: '', employee_id: '', valid_until: '', photoFile: null
 })
 
 const activeCameras = computed(() => cameras.value.filter(c => c.is_active))
+const getEmployeeFullName = (employee) => [employee.last_name, employee.first_name, employee.middle_name].filter(Boolean).join(' ')
+const selectedEmployeeName = computed(() => {
+  const employee = employees.value.find(item => String(item.id) === String(guestForm.value.employee_id))
+  return employee ? getEmployeeFullName(employee) : ''
+})
+const filteredEmployeeOptions = computed(() => {
+  const query = employeeSearchQuery.value.trim().toLowerCase()
+  if (!query) return employees.value
+  return employees.value.filter(employee => getEmployeeFullName(employee).toLowerCase().includes(query))
+})
+
+const loadEmployees = async () => {
+  try {
+    const res = await employeesApi.getEmployees(0, 1000)
+    employees.value = res.data.filter(employee => employee.is_active)
+  } catch (error) {
+    console.error('Ошибка загрузки сотрудников:', error)
+  }
+}
 
 const loadCameras = async () => {
   try {
@@ -237,17 +286,32 @@ const openGuestDialog = () => {
   const tzOffset = (new Date()).getTimezoneOffset() * 60000;
   const localISOTime = (new Date(today - tzOffset)).toISOString().slice(0, 16);
 
-  guestForm.value = { 
-    last_name: '', first_name: '', middle_name: '', purpose: '',
+  guestForm.value = {
+    last_name: '', first_name: '', middle_name: '', employee_id: '',
     valid_until: localISOTime,
-    photoFile: null 
+    photoFile: null
   }
+  employeeDropdownOpen.value = false
+  employeeSearchQuery.value = ''
   displayGuestDialog.value = true
 }
 
 const closeGuestDialog = () => {
   displayGuestDialog.value = false
+  employeeDropdownOpen.value = false
+  employeeSearchQuery.value = ''
   if (photoPreview.value) URL.revokeObjectURL(photoPreview.value)
+}
+
+const toggleEmployeeDropdown = () => {
+  employeeDropdownOpen.value = !employeeDropdownOpen.value
+  if (!employeeDropdownOpen.value) employeeSearchQuery.value = ''
+}
+
+const selectEmployee = (employee) => {
+  guestForm.value.employee_id = String(employee.id)
+  employeeDropdownOpen.value = false
+  employeeSearchQuery.value = ''
 }
 
 const takeSnapshot = async () => {
@@ -269,7 +333,7 @@ const takeSnapshot = async () => {
 }
 
 const saveGuest = async () => {
-  if (!guestForm.value.last_name || !guestForm.value.first_name || !guestForm.value.valid_until) {
+  if (!guestForm.value.last_name || !guestForm.value.first_name || !guestForm.value.valid_until || !guestForm.value.employee_id) {
     alert('Заполните обязательные поля (Фамилия, Имя, Срок действия)')
     return
   }
@@ -283,7 +347,7 @@ const saveGuest = async () => {
     formData.append('last_name', guestForm.value.last_name)
     formData.append('first_name', guestForm.value.first_name)
     if (guestForm.value.middle_name) formData.append('middle_name', guestForm.value.middle_name)
-    if (guestForm.value.purpose) formData.append('purpose', guestForm.value.purpose)
+    formData.append('employee_id', guestForm.value.employee_id)
     
     formData.append('valid_until', guestForm.value.valid_until)
     formData.append('photo', guestForm.value.photoFile)
@@ -299,6 +363,7 @@ const saveGuest = async () => {
 
 onMounted(() => {
   loadCameras()
+  loadEmployees()
   fetchLogs()
   logInterval = setInterval(fetchLogs, 2000)
 })
@@ -386,6 +451,17 @@ onBeforeUnmount(() => {
 .required { color: #ef4444; }
 .form-input { width: 100%; box-sizing: border-box; padding: 0.75rem 1rem; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 0.95rem; background: #ffffff; outline: none; }
 .form-input:focus { border-color: #3b82f6; }
+.placeholder-text { color: #94a3b8; }
+.employee-select { position: relative; }
+.employee-select-trigger { display: flex; align-items: center; justify-content: space-between; cursor: pointer; text-align: left; }
+.employee-select-panel { position: absolute; top: calc(100% + 0.5rem); left: 0; right: 0; z-index: 20; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 12px; box-shadow: 0 12px 30px rgba(15, 23, 42, 0.12); padding: 0.75rem; }
+.employee-search-box { position: relative; margin-bottom: 0.75rem; }
+.employee-search-box i { position: absolute; left: 0.85rem; top: 50%; transform: translateY(-50%); color: #94a3b8; }
+.employee-search-input { width: 100%; box-sizing: border-box; padding: 0.7rem 0.9rem 0.7rem 2.4rem; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 0.92rem; outline: none; }
+.employee-search-input:focus { border-color: #3b82f6; }
+.employee-option { width: 100%; border: none; background: transparent; text-align: left; padding: 0.7rem 0.85rem; border-radius: 8px; cursor: pointer; color: #334155; font-size: 0.94rem; }
+.employee-option:hover, .employee-option.selected { background: #eff6ff; color: #1d4ed8; }
+.employee-option-empty { padding: 0.7rem 0.85rem; color: #94a3b8; font-size: 0.9rem; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 1rem; margin-top: 2rem; border-top: 1px solid #e2e8f0; padding-top: 1.5rem; }
 
 .btn-primary, .btn-text { border: none; padding: 0.65rem 1.2rem; border-radius: 8px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 0.5rem; transition: 0.2s; }
