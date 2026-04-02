@@ -1,0 +1,37 @@
+from datetime import datetime
+from sqlmodel import SQLModel, Field
+from sqlalchemy import Column, String, Integer, ForeignKey
+from sqlalchemy.dialects.mysql import MEDIUMBLOB, JSON
+
+
+class Guest(SQLModel, table=True):
+    __tablename__ = "guests"
+
+    id: int | None = Field(default=None, primary_key=True)
+    last_name: str
+    first_name: str
+    middle_name: str | None = None
+    purpose: str | None = None
+    valid_until: datetime
+    is_active: bool = Field(default=True)
+
+
+class GuestFaceSample(SQLModel, table=True):
+    __tablename__ = "guest_face_samples"
+
+    id: int | None = Field(default=None, primary_key=True)
+
+    guest_id: int = Field(
+        sa_column=Column(
+            Integer,
+            ForeignKey("guests.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True
+        )
+    )
+
+    mime_type: str = Field(sa_column=Column(String(100), nullable=False))
+    photo_data: bytes = Field(sa_column=Column(MEDIUMBLOB, nullable=False))
+    embedding: list[float] = Field(sa_column=Column(JSON, nullable=False))
+    body_embedding: list[float] | None = Field(default=None, sa_column=Column(JSON, nullable=True))
+    created_at: datetime = Field(default_factory=datetime.now)

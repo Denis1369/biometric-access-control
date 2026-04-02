@@ -10,8 +10,9 @@
         <RouterLink to="/employees" class="nav-link"><i class="pi pi-users"></i> Сотрудники</RouterLink>
         <RouterLink to="/cameras" class="nav-link"><i class="pi pi-video"></i> Камеры</RouterLink>
         <RouterLink to="/route" class="nav-link"><i class="pi pi-sign-in"></i> Проходная</RouterLink>
-        <RouterLink to="/tracking" class="nav-link"><i class="pi pi-map"></i> План здания</RouterLink>
-        <RouterLink to="/departments" class="nav-link" active-class="active"><i class="pi pi-sitemap"></i> Отделы</RouterLink>
+        <RouterLink to="/tracking" class="nav-link"><i class="pi pi-building"></i> План здания</RouterLink>
+        <RouterLink to="/departments" class="nav-link"><i class="pi pi-sitemap"></i> Отделы</RouterLink>
+        <RouterLink to="/guests" class="nav-link"><i class="pi pi-user-plus"></i> Гости</RouterLink>
       </nav>
     </aside>
 

@@ -5,3 +5,4 @@ from .logs import AccessLog, TrackingLog
 from .employee_face_samples import EmployeeFaceSample
 from .buildings import Building
 from .floors import Floor
+from .guests import Guest, GuestFaceSample

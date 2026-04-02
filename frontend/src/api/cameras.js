@@ -29,5 +29,9 @@ export const camerasApi = {
 
   deleteCamera(id) {
     return apiClient.delete(`/cameras/${id}`)
+  },
+
+  getSnapshot(id) {
+    return apiClient.get(`/cameras/${id}/snapshot`, { responseType: 'blob' })
   }
 }

@@ -1,6 +1,6 @@
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Response
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Field, Session, SQLModel, select
 
@@ -299,3 +299,21 @@ def delete_camera(camera_id: int, session: Session = Depends(get_session)):
     stream_manager.remove_camera(camera_id)
     
     return None
+
+@router.get(
+    "/{camera_id}/snapshot",
+    summary="Сделать моментальный снимок с камеры",
+    description="Забирает последний кадр из фонового видеопотока. Идеально для регистрации гостей."
+)
+def get_camera_snapshot(camera_id: int):
+    from app.services.stream_manager import stream_manager
+    
+    frame_bytes = stream_manager.get_latest_frame(camera_id, max_age_sec=3.0)
+    
+    if not frame_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Камера неактивна или поток временно недоступен"
+        )
+        
+    return Response(content=frame_bytes, media_type="image/jpeg")

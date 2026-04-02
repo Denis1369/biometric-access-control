@@ -7,6 +7,7 @@ from calendar import monthrange
 
 from app.core.database import get_session
 from app.models.employees import Employee
+from app.models.guests import Guest
 from app.models.cameras import Camera
 from app.models.departments import Department
 from app.models.logs import AccessLog, TrackingLog
@@ -35,8 +36,9 @@ class DashboardStatsResponse(BaseModel):
 @router.get("/access-logs", response_model=List[AccessLogResponse])
 def get_access_logs(session: Session = Depends(get_session), skip: int = 0, limit: int = 100):
     statement = (
-        select(AccessLog, Employee, Camera)
+        select(AccessLog, Employee, Guest, Camera)
         .join(Employee, AccessLog.employee_id == Employee.id, isouter=True)
+        .join(Guest, AccessLog.guest_id == Guest.id, isouter=True)
         .join(Camera, AccessLog.camera_id == Camera.id, isouter=True)
         .order_by(AccessLog.timestamp.desc())
         .offset(skip)
@@ -46,12 +48,15 @@ def get_access_logs(session: Session = Depends(get_session), skip: int = 0, limi
     results = session.exec(statement).all()
     
     response_data = []
-    for access_log, employee, camera in results:
-        full_name = "Неизвестный"
+    for access_log, employee, guest, camera in results:
         if employee:
             full_name = f"{employee.last_name} {employee.first_name}"
             if employee.middle_name:
                 full_name += f" {employee.middle_name}"
+        elif guest:
+            full_name = f"[Гость] {guest.last_name} {guest.first_name}"
+        else:
+            full_name = "Неизвестное лицо"
             
         response_data.append(
             AccessLogResponse(
@@ -67,8 +72,9 @@ def get_access_logs(session: Session = Depends(get_session), skip: int = 0, limi
 @router.get("/tracking-logs", response_model=List[TrackingLogResponse])
 def get_tracking_logs(session: Session = Depends(get_session), skip: int = 0, limit: int = 100):
     statement = (
-        select(TrackingLog, Employee, Camera)
+        select(TrackingLog, Employee, Guest, Camera)
         .join(Employee, TrackingLog.employee_id == Employee.id, isouter=True)
+        .join(Guest, TrackingLog.guest_id == Guest.id, isouter=True) # <-- Добавили гостей
         .join(Camera, TrackingLog.camera_id == Camera.id, isouter=True)
         .order_by(TrackingLog.timestamp.desc())
         .offset(skip)
@@ -77,8 +83,14 @@ def get_tracking_logs(session: Session = Depends(get_session), skip: int = 0, li
     
     results = session.exec(statement).all()
     response_data = []
-    for tracking_log, employee, camera in results:
-        full_name = f"{employee.last_name} {employee.first_name}" if employee else "Неизвестный"
+    for tracking_log, employee, guest, camera in results:
+        if employee:
+            full_name = f"{employee.last_name} {employee.first_name}"
+        elif guest:
+            full_name = f"[Гость] {guest.last_name} {guest.first_name}"
+        else:
+            full_name = "Неизвестное лицо"
+            
         response_data.append(
             TrackingLogResponse(
                 id=tracking_log.id,
@@ -184,12 +196,23 @@ def get_presence(target_date: str | None = None, session: Session = Depends(get_
         query_date = date.today()
 
     total_active = session.exec(select(func.count(Employee.id)).where(Employee.is_active == True)).one()
-    present = session.exec(
+    
+    present_employees = session.exec(
         select(func.count(func.distinct(AccessLog.employee_id)))
         .where(func.date(AccessLog.timestamp) == query_date)
         .where(AccessLog.status == 'granted')
         .where(AccessLog.employee_id != None)
     ).one()
+    
+    present_guests = session.exec(
+        select(func.count(func.distinct(AccessLog.guest_id)))
+        .where(func.date(AccessLog.timestamp) == query_date)
+        .where(AccessLog.status == 'granted')
+        .where(AccessLog.guest_id != None)
+    ).one()
+    
+    present = present_employees + present_guests
+    
     percentage = int((present / total_active * 100)) if total_active > 0 else 0
     return {"present": present, "total": total_active, "percentage": percentage}
 
@@ -321,7 +344,8 @@ def get_discipline_stats(session: Session = Depends(get_session)):
             func.extract('month', AccessLog.timestamp) == today.month,
             func.extract('year', AccessLog.timestamp) == today.year,
             AccessLog.status == 'granted',
-            Camera.direction.in_(['in', 'both'])
+            Camera.direction.in_(['in', 'both']),
+            AccessLog.employee_id != None
         )
     )
     logs = session.exec(statement).all()

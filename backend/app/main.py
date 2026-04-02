@@ -2,17 +2,22 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import SQLModel
+from app.models import employees as employees_model
 
 from app.core.database import engine
-from app.api import employees, departments, cameras, analytics, websockets, buildings, floors
+from app.api import employees, departments, cameras, analytics, websockets, buildings, floors, guests
 
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from app.services.stream_manager import stream_manager
 
+def create_db_and_tables():
+    SQLModel.metadata.create_all(engine)
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    create_db_and_tables()
     print("Запуск фонового анализа видеопотоков...")
     stream_manager.start_all()
     yield
@@ -41,6 +46,8 @@ app.include_router(websockets.router)
 app.include_router(analytics.router)
 app.include_router(buildings.router)
 app.include_router(floors.router)
+app.include_router(guests.router)
+
 
 @app.get("/")
 def root():
