@@ -7,5 +7,6 @@ class Employee(SQLModel, table=True):
     last_name: str = Field(index=True)
     first_name: str
     middle_name: str | None = Field(default=None)
+    position: str | None = Field(default=None)
     department_id: int | None = Field(default=None, foreign_key="departments.id")
     is_active: bool = Field(default=True)
