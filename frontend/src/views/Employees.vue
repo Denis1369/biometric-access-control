@@ -5,7 +5,7 @@
         <h1 class="page-title">Сотрудники</h1>
         <p class="page-subtitle">Управление персоналом, доступом и биометрическими данными.</p>
       </div>
-      <button class="btn-primary" @click="openNewDialog">
+      <button v-if="canManageEmployees" class="btn-primary" @click="openNewDialog">
         <i class="pi pi-plus"></i> Добавить
       </button>
     </div>
@@ -41,10 +41,10 @@
             {{ emp.is_active ? 'АКТИВЕН' : 'ЗАБЛОКИРОВАН' }}
           </div>
           <div class="card-actions">
-            <button class="btn-icon" @click="openEditDialog(emp)" title="Редактировать">
+            <button v-if="canManageEmployees" class="btn-icon" @click="openEditDialog(emp)" title="Редактировать">
               <i class="pi pi-pencil"></i>
             </button>
-            <button class="btn-icon danger" @click="confirmDelete(emp.id)" title="Удалить">
+            <button v-if="canManageEmployees" class="btn-icon danger" @click="confirmDelete(emp.id)" title="Удалить">
               <i class="pi pi-trash"></i>
             </button>
           </div>
@@ -164,6 +164,10 @@
 import { ref, onMounted, computed } from 'vue'
 import { employeesApi } from '../api/employees'
 import { departmentsApi } from '../api/departments'
+import { useAuth } from '../services/auth'
+
+const auth = useAuth()
+const canManageEmployees = computed(() => auth.hasAnyRole('super_admin', 'tech_hr'))
 
 const employees = ref([])
 const departments = ref([])
@@ -276,6 +280,7 @@ const removeNewPhoto = (index) => {
 }
 
 const openNewDialog = () => {
+  if (!canManageEmployees.value) return
   isEditMode.value = false
   empForm.value = { id: null, last_name: '', first_name: '', middle_name: '', department_id: '', is_active: true }
   
@@ -289,6 +294,7 @@ const openNewDialog = () => {
 }
 
 const openEditDialog = async (emp) => {
+  if (!canManageEmployees.value) return
   isEditMode.value = true
   empForm.value = { ...emp, department_id: String(emp.department_id) }
   
@@ -326,6 +332,7 @@ const closeDialog = () => {
 }
 
 const saveEmployee = async () => {
+  if (!canManageEmployees.value) return
   if (!empForm.value.last_name || !empForm.value.first_name || !empForm.value.department_id) {
     alert('Заполните обязательные поля (Фамилия, Имя, Отдел)')
     return
@@ -373,6 +380,7 @@ const saveEmployee = async () => {
 }
 
 const confirmDelete = async (id) => {
+  if (!canManageEmployees.value) return
   if (confirm('Точно удалить сотрудника? Это действие необратимо.')) {
     try {
       await employeesApi.deleteEmployee(id)

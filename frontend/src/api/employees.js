@@ -1,9 +1,4 @@
-import apiClient from './client'
-
-function normalizeBaseUrl(url) {
-  if (!url) return ''
-  return url.endsWith('/') ? url.slice(0, -1) : url
-}
+import apiClient, { buildApiUrl } from './client'
 
 export const employeesApi = {
   getEmployees(skip = 0, limit = 100) {
@@ -15,8 +10,7 @@ export const employeesApi = {
   },
 
   getFaceSamplePhotoUrl(sampleId) {
-    const baseUrl = normalizeBaseUrl(apiClient.defaults.baseURL || '')
-    return `${baseUrl}/employees/face-samples/${sampleId}/photo`
+    return buildApiUrl(`/employees/face-samples/${sampleId}/photo`, { withToken: true })
   },
 
   createEmployee(formData) {

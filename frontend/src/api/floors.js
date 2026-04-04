@@ -1,9 +1,4 @@
-import apiClient from './client'
-
-function normalizeBaseUrl(url) {
-  if (!url) return ''
-  return url.endsWith('/') ? url.slice(0, -1) : url
-}
+import apiClient, { buildApiUrl } from './client'
 
 export const floorsApi = {
   getFloors(buildingId = null) {
@@ -20,8 +15,7 @@ export const floorsApi = {
   },
 
   getFloorPlanUrl(id) {
-    const baseUrl = normalizeBaseUrl(apiClient.defaults.baseURL || '')
-    return `${baseUrl}/floors/${id}/plan`
+    return buildApiUrl(`/floors/${id}/plan`, { withToken: true })
   },
 
   createFloor(formData) {

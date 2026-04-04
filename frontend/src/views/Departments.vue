@@ -6,10 +6,10 @@
         <p class="page-subtitle">Управление структурой компании и рабочим временем.</p>
       </div>
       <div class="top-buttons">
-        <button class="btn-secondary" @click="openGlobalScheduleDialog">
+        <button v-if="canManageDepartments" class="btn-secondary" @click="openGlobalScheduleDialog">
           <i class="pi pi-clock"></i> График для всех
         </button>
-        <button class="btn-primary" @click="openNewDialog">
+        <button v-if="canManageDepartments" class="btn-primary" @click="openNewDialog">
           <i class="pi pi-plus"></i> Добавить отдел
         </button>
       </div>
@@ -36,7 +36,7 @@
       </Column>
       <Column header="Действия" style="width: 10%">
         <template #body="slotProps">
-          <div class="action-buttons">
+          <div v-if="canManageDepartments" class="action-buttons">
             <button class="btn-icon warning" @click="openEditDialog(slotProps.data)" title="Редактировать">
               <i class="pi pi-pencil"></i>
             </button>
@@ -127,10 +127,14 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import DataTable from 'primevue/datatable'
 import Column from 'primevue/column'
 import { departmentsApi } from '../api/departments'
+import { useAuth } from '../services/auth'
+
+const auth = useAuth()
+const canManageDepartments = computed(() => auth.hasAnyRole('super_admin', 'tech_hr'))
 
 const departments = ref([])
 const displayDialog = ref(false)
@@ -156,12 +160,14 @@ const loadData = async () => {
 }
 
 const openNewDialog = () => {
+  if (!canManageDepartments.value) return
   isEditMode.value = false
   deptForm.value = { id: null, name: '', work_start: '09:00', work_end: '18:00', lunch_start: '13:00', lunch_end: '14:00' }
   displayDialog.value = true
 }
 
 const openEditDialog = (dept) => {
+  if (!canManageDepartments.value) return
   isEditMode.value = true
   deptForm.value = { ...dept }
   // Отрезаем секунды от времени для input type="time" (09:00:00 -> 09:00)
@@ -175,6 +181,7 @@ const openEditDialog = (dept) => {
 const closeDialog = () => { displayDialog.value = false }
 
 const saveDepartment = async () => {
+  if (!canManageDepartments.value) return
   if (!deptForm.value.name.trim()) return alert('Введите название отдела')
   try {
     const payload = { ...deptForm.value }
@@ -191,6 +198,7 @@ const saveDepartment = async () => {
 }
 
 const confirmDelete = async (id) => {
+  if (!canManageDepartments.value) return
   if (confirm('Точно удалить отдел? Это может вызвать ошибку, если к нему привязаны сотрудники.')) {
     try {
       await departmentsApi.deleteDepartment(id)
@@ -201,10 +209,14 @@ const confirmDelete = async (id) => {
   }
 }
 
-const openGlobalScheduleDialog = () => { displayGlobalDialog.value = true }
+const openGlobalScheduleDialog = () => {
+  if (!canManageDepartments.value) return
+  displayGlobalDialog.value = true
+}
 const closeGlobalDialog = () => { displayGlobalDialog.value = false }
 
 const applyGlobalSchedule = async () => {
+  if (!canManageDepartments.value) return
   try {
     await departmentsApi.applyGlobalSchedule(globalSchedule.value)
     closeGlobalDialog()

@@ -7,13 +7,13 @@
       </div>
 
       <div class="top-buttons">
-        <button class="btn-secondary" @click="openBuildingModal()">
+        <button v-if="canEditPlan" class="btn-secondary" @click="openBuildingModal()">
           <i class="pi pi-building"></i> Новое здание
         </button>
-        <button class="btn-secondary" @click="openFloorModal()" :disabled="!selectedBuildingId">
+        <button v-if="canEditPlan" class="btn-secondary" @click="openFloorModal()" :disabled="!selectedBuildingId">
           <i class="pi pi-plus"></i> Новый этаж
         </button>
-        <button class="btn-secondary" @click="openFloorModal(true)" :disabled="!selectedFloorId">
+        <button v-if="canEditPlan" class="btn-secondary" @click="openFloorModal(true)" :disabled="!selectedFloorId">
           <i class="pi pi-image"></i> План этажа
         </button>
       </div>
@@ -52,7 +52,7 @@
 
       <div class="filter-actions">
         <button
-          v-if="!isEditMode"
+          v-if="canEditPlan && !isEditMode"
           class="btn-primary"
           @click="toggleEditMode"
           :disabled="!selectedFloorId"
@@ -296,6 +296,11 @@ import { employeesApi } from '../api/employees'
 import { camerasApi } from '../api/cameras'
 import { buildingsApi } from '../api/buildings'
 import { floorsApi } from '../api/floors'
+import { buildWsUrl } from '../api/client'
+import { useAuth } from '../services/auth'
+
+const auth = useAuth()
+const canEditPlan = computed(() => auth.hasAnyRole('super_admin', 'tech_hr'))
 
 const logs = ref([])
 const employees = ref([])
@@ -409,9 +414,7 @@ function onCameraClick(camera) {
 }
 
 function getVideoWsUrl(cameraId) {
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const host = 'localhost:8000'
-  return `${protocol}//${host}/ws/video/${cameraId}`
+  return buildWsUrl(`/ws/video/${cameraId}`)
 }
 
 function cleanupFrameUrl() {
@@ -532,6 +535,7 @@ function removeCameraFromFloor(id) {
 }
 
 async function toggleEditMode() {
+  if (!canEditPlan.value) return
   if (!selectedFloorId.value) return
   isEditMode.value = true
   activeCameraId.value = null
@@ -540,6 +544,7 @@ async function toggleEditMode() {
 }
 
 function cancelEditMode() {
+  if (!canEditPlan.value) return
   isEditMode.value = false
   activeCameraId.value = null
   draggingCameraId.value = null
@@ -548,6 +553,7 @@ function cancelEditMode() {
 }
 
 async function savePlan() {
+  if (!canEditPlan.value) return
   if (!selectedFloorId.value) return
   savingPlan.value = true
   try {
@@ -661,6 +667,7 @@ function distributeFallbackX(index, total) {
 }
 
 function openBuildingModal() {
+  if (!canEditPlan.value) return
   buildingForm.value = { name: '', address: '' }
   buildingModalVisible.value = true
 }
@@ -671,6 +678,7 @@ function closeBuildingModal() {
 }
 
 async function saveBuilding() {
+  if (!canEditPlan.value) return
   if (!buildingForm.value.name.trim()) return alert('Введите название здания')
   buildingSaving.value = true
   try {
@@ -689,6 +697,7 @@ async function saveBuilding() {
 }
 
 function openFloorModal(editCurrent = false) {
+  if (!canEditPlan.value) return
   if (!selectedBuildingId.value) return alert('Сначала выберите или создайте здание')
   if (editCurrent && currentFloor.value) {
     floorForm.value = {
@@ -723,6 +732,7 @@ function onFloorPlanSelected(event) {
 }
 
 async function saveFloor() {
+  if (!canEditPlan.value) return
   if (!floorForm.value.building_id || !floorForm.value.name.trim() || floorForm.value.floor_number === '') {
     return alert('Заполните обязательные поля этажа')
   }

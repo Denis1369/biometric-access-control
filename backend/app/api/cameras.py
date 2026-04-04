@@ -1,16 +1,34 @@
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, status, Response
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import Field, Session, SQLModel, select
+from sqlmodel import Field, SQLModel, Session, select
 
 from app.core.database import get_session
+from app.core.deps import require_roles
 from app.models.buildings import Building
 from app.models.cameras import Camera
 from app.models.floors import Floor
+from app.models.user import UserRole
 from app.services.stream_manager import stream_manager
 
 router = APIRouter(prefix="/api/cameras", tags=["Камеры"])
+
+READ_ROLES = (
+    UserRole.SUPER_ADMIN,
+    UserRole.CHECKPOINT_OPERATOR,
+    UserRole.MANAGER_ANALYST,
+    UserRole.TECH_HR,
+)
+WRITE_ROLES = (
+    UserRole.SUPER_ADMIN,
+    UserRole.TECH_HR,
+)
+SNAPSHOT_ROLES = (
+    UserRole.SUPER_ADMIN,
+    UserRole.CHECKPOINT_OPERATOR,
+    UserRole.TECH_HR,
+)
 
 
 class CameraCreate(SQLModel):
@@ -58,9 +76,6 @@ def _validate_location(
     building_id: int | None,
     floor_id: int | None,
 ):
-    building = None
-    floor = None
-
     if building_id is not None:
         building = session.get(Building, building_id)
         if not building:
@@ -93,7 +108,8 @@ def _validate_location(
     "/",
     response_model=List[CameraReadWithNames],
     summary="Получить камеры",
-    description="Возвращает список камер. Можно фильтровать по building_id и floor_id."
+    description="Возвращает список камер. Можно фильтровать по building_id и floor_id.",
+    dependencies=[Depends(require_roles(*READ_ROLES))],
 )
 def get_cameras(
     building_id: int | None = None,
@@ -139,7 +155,8 @@ def get_cameras(
     "/{camera_id}",
     response_model=CameraReadWithNames,
     summary="Получить камеру по ID",
-    description="Возвращает карточку камеры."
+    description="Возвращает карточку камеры.",
+    dependencies=[Depends(require_roles(*READ_ROLES))],
 )
 def get_camera(camera_id: int, session: Session = Depends(get_session)):
     statement = (
@@ -177,7 +194,8 @@ def get_camera(camera_id: int, session: Session = Depends(get_session)):
     response_model=CameraRead,
     status_code=status.HTTP_201_CREATED,
     summary="Создать камеру",
-    description="Создает новую камеру."
+    description="Создает новую камеру.",
+    dependencies=[Depends(require_roles(*WRITE_ROLES))],
 )
 def create_camera(payload: CameraCreate, session: Session = Depends(get_session)):
     building_id, floor_id = _validate_location(session, payload.building_id, payload.floor_id)
@@ -200,7 +218,7 @@ def create_camera(payload: CameraCreate, session: Session = Depends(get_session)
 
         if camera.is_active:
             stream_manager.add_camera(camera.id, camera.ip_address, camera.direction)
-            
+
         return camera
     except IntegrityError:
         session.rollback()
@@ -214,7 +232,8 @@ def create_camera(payload: CameraCreate, session: Session = Depends(get_session)
     "/{camera_id}",
     response_model=CameraRead,
     summary="Обновить камеру",
-    description="Обновляет камеру, ее этаж и позицию на плане."
+    description="Обновляет камеру, ее этаж и позицию на плане.",
+    dependencies=[Depends(require_roles(*WRITE_ROLES))],
 )
 def update_camera(
     camera_id: int,
@@ -269,7 +288,7 @@ def update_camera(
             stream_manager.add_camera(camera.id, camera.ip_address, camera.direction)
         else:
             stream_manager.remove_camera(camera.id)
-            
+
         return camera
     except IntegrityError:
         session.rollback()
@@ -283,7 +302,8 @@ def update_camera(
     "/{camera_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Удалить камеру",
-    description="Удаляет камеру."
+    description="Удаляет камеру.",
+    dependencies=[Depends(require_roles(*WRITE_ROLES))],
 )
 def delete_camera(camera_id: int, session: Session = Depends(get_session)):
     camera = session.get(Camera, camera_id)
@@ -297,23 +317,22 @@ def delete_camera(camera_id: int, session: Session = Depends(get_session)):
     session.commit()
 
     stream_manager.remove_camera(camera_id)
-    
     return None
+
 
 @router.get(
     "/{camera_id}/snapshot",
     summary="Сделать моментальный снимок с камеры",
-    description="Забирает последний кадр из фонового видеопотока. Идеально для регистрации гостей."
+    description="Забирает последний кадр из фонового видеопотока. Идеально для регистрации гостей.",
+    dependencies=[Depends(require_roles(*SNAPSHOT_ROLES))],
 )
 def get_camera_snapshot(camera_id: int):
-    from app.services.stream_manager import stream_manager
-    
     frame_bytes = stream_manager.get_latest_frame(camera_id, max_age_sec=3.0)
-    
+
     if not frame_bytes:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Камера неактивна или поток временно недоступен"
+            detail="Камера неактивна или поток временно недоступен",
         )
-        
+
     return Response(content=frame_bytes, media_type="image/jpeg")

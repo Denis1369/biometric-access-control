@@ -3,14 +3,27 @@ from typing import List
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import Field, Session, SQLModel, select
+from sqlmodel import Session, SQLModel, select
 
 from app.core.database import get_session
+from app.core.deps import require_roles
 from app.models.buildings import Building
 from app.models.cameras import Camera
 from app.models.floors import Floor
+from app.models.user import UserRole
 
 router = APIRouter(prefix="/api/floors", tags=["Этажи"])
+
+READ_ROLES = (
+    UserRole.SUPER_ADMIN,
+    UserRole.CHECKPOINT_OPERATOR,
+    UserRole.MANAGER_ANALYST,
+    UserRole.TECH_HR,
+)
+WRITE_ROLES = (
+    UserRole.SUPER_ADMIN,
+    UserRole.TECH_HR,
+)
 
 
 class FloorRead(SQLModel):
@@ -23,11 +36,6 @@ class FloorRead(SQLModel):
     updated_at: datetime
 
 
-class FloorUpdatePayload(SQLModel):
-    name: str | None = None
-    floor_number: int | None = None
-
-
 class FloorWithBuildingRead(FloorRead):
     building_name: str | None = None
 
@@ -36,7 +44,8 @@ class FloorWithBuildingRead(FloorRead):
     "/",
     response_model=List[FloorRead],
     summary="Получить этажи",
-    description="Возвращает этажи. Можно отфильтровать по building_id."
+    description="Возвращает этажи. Можно отфильтровать по building_id.",
+    dependencies=[Depends(require_roles(*READ_ROLES))],
 )
 def get_floors(
     building_id: int | None = None,
@@ -66,7 +75,8 @@ def get_floors(
     "/{floor_id}",
     response_model=FloorWithBuildingRead,
     summary="Получить этаж по ID",
-    description="Возвращает карточку этажа."
+    description="Возвращает карточку этажа.",
+    dependencies=[Depends(require_roles(*READ_ROLES))],
 )
 def get_floor(floor_id: int, session: Session = Depends(get_session)):
     statement = (
@@ -97,7 +107,8 @@ def get_floor(floor_id: int, session: Session = Depends(get_session)):
 @router.get(
     "/{floor_id}/plan",
     summary="Получить план этажа",
-    description="Возвращает изображение плана этажа."
+    description="Возвращает изображение плана этажа.",
+    dependencies=[Depends(require_roles(*READ_ROLES))],
 )
 def get_floor_plan(floor_id: int, session: Session = Depends(get_session)):
     floor = session.get(Floor, floor_id)
@@ -120,7 +131,8 @@ def get_floor_plan(floor_id: int, session: Session = Depends(get_session)):
     response_model=FloorRead,
     status_code=status.HTTP_201_CREATED,
     summary="Создать этаж",
-    description="Создает этаж и при необходимости загружает план."
+    description="Создает этаж и при необходимости загружает план.",
+    dependencies=[Depends(require_roles(*WRITE_ROLES))],
 )
 async def create_floor(
     building_id: int = Form(...),
@@ -176,7 +188,8 @@ async def create_floor(
     "/{floor_id}",
     response_model=FloorRead,
     summary="Обновить этаж",
-    description="Обновляет название, номер и план этажа."
+    description="Обновляет название, номер и план этажа.",
+    dependencies=[Depends(require_roles(*WRITE_ROLES))],
 )
 async def update_floor(
     floor_id: int,
@@ -239,7 +252,8 @@ async def update_floor(
     "/{floor_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Удалить этаж",
-    description="Удаляет этаж, отвязывает камеры и удаляет план этажа."
+    description="Удаляет этаж, отвязывает камеры и удаляет план этажа.",
+    dependencies=[Depends(require_roles(*WRITE_ROLES))],
 )
 def delete_floor(floor_id: int, session: Session = Depends(get_session)):
     floor = session.get(Floor, floor_id)

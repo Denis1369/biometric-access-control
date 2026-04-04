@@ -1,15 +1,34 @@
 from datetime import datetime
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Response
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
 from sqlmodel import Session, SQLModel, select
 
 from app.core.database import get_session
-from app.models.guests import Guest, GuestFaceSample
+from app.core.deps import require_roles
 from app.models.employees import Employee
+from app.models.guests import Guest, GuestFaceSample
+from app.models.user import UserRole
 from app.services.photo_conversion import extract_face_encoding
 
 router = APIRouter(prefix="/api/guests", tags=["Гости"])
+
+READ_ROLES = (
+    UserRole.SUPER_ADMIN,
+    UserRole.CHECKPOINT_OPERATOR,
+    UserRole.MANAGER_ANALYST,
+    UserRole.TECH_HR,
+)
+WRITE_ROLES = (
+    UserRole.SUPER_ADMIN,
+    UserRole.CHECKPOINT_OPERATOR,
+    UserRole.TECH_HR,
+)
+DELETE_ROLES = (
+    UserRole.SUPER_ADMIN,
+    UserRole.TECH_HR,
+)
+
 
 class GuestRead(SQLModel):
     id: int
@@ -38,15 +57,26 @@ def build_guest_read(session: Session, guest: Guest) -> GuestRead:
     return GuestRead(
         **guest.model_dump(),
         employee_name=build_employee_name(employee),
-        photo_id=sample.id if sample else None
+        photo_id=sample.id if sample else None,
     )
 
-@router.get("/", response_model=List[GuestRead])
+
+@router.get(
+    "/",
+    response_model=List[GuestRead],
+    dependencies=[Depends(require_roles(*READ_ROLES))],
+)
 def get_guests(session: Session = Depends(get_session)):
     guests = session.exec(select(Guest).order_by(Guest.id.desc())).all()
     return [build_guest_read(session, guest) for guest in guests]
 
-@router.post("/", response_model=GuestRead, status_code=status.HTTP_201_CREATED)
+
+@router.post(
+    "/",
+    response_model=GuestRead,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_roles(*WRITE_ROLES))],
+)
 async def create_guest(
     last_name: str = Form(...),
     first_name: str = Form(...),
@@ -54,7 +84,7 @@ async def create_guest(
     employee_id: int = Form(...),
     valid_until: datetime = Form(...),
     photo: UploadFile = File(...),
-    session: Session = Depends(get_session)
+    session: Session = Depends(get_session),
 ):
     employee = session.get(Employee, employee_id)
     if not employee:
@@ -66,7 +96,7 @@ async def create_guest(
         middle_name=middle_name.strip() if middle_name else None,
         employee_id=employee_id,
         valid_until=valid_until,
-        is_active=True
+        is_active=True,
     )
 
     try:
@@ -86,7 +116,7 @@ async def create_guest(
             guest_id=guest.id,
             mime_type=photo.content_type or "image/jpeg",
             photo_data=image_bytes,
-            embedding=face_vector
+            embedding=face_vector,
         )
         session.add(sample)
         session.commit()
@@ -94,38 +124,54 @@ async def create_guest(
 
         return build_guest_read(session, guest)
 
+    except HTTPException:
+        session.rollback()
+        raise
     except Exception as e:
         session.rollback()
         raise HTTPException(status_code=500, detail=f"Ошибка создания гостя: {str(e)}")
 
-@router.patch("/{guest_id}/deactivate")
+
+@router.patch(
+    "/{guest_id}/deactivate",
+    dependencies=[Depends(require_roles(*WRITE_ROLES))],
+)
 def deactivate_guest(guest_id: int, session: Session = Depends(get_session)):
     guest = session.get(Guest, guest_id)
     if not guest:
         raise HTTPException(status_code=404, detail="Гость не найден")
-        
+
     guest.is_active = False
     guest.valid_until = datetime.now()
-    
+
     session.add(guest)
     session.commit()
     return {"status": "ok", "message": "Пропуск успешно аннулирован"}
 
-@router.delete("/{guest_id}", status_code=status.HTTP_204_NO_CONTENT)
+
+@router.delete(
+    "/{guest_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_roles(*DELETE_ROLES))],
+)
 def delete_guest(guest_id: int, session: Session = Depends(get_session)):
     guest = session.get(Guest, guest_id)
     if not guest:
         raise HTTPException(status_code=404, detail="Гость не найден")
-        
+
     samples = session.exec(select(GuestFaceSample).where(GuestFaceSample.guest_id == guest.id)).all()
-    for s in samples:
-        session.delete(s)
-        
+    for sample in samples:
+        session.delete(sample)
+
     session.delete(guest)
     session.commit()
     return None
 
-@router.get("/photo/{photo_id}")
+
+@router.get(
+    "/photo/{photo_id}",
+    dependencies=[Depends(require_roles(*READ_ROLES))],
+)
 def get_guest_photo(photo_id: int, session: Session = Depends(get_session)):
     sample = session.get(GuestFaceSample, photo_id)
     if not sample:

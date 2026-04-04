@@ -5,7 +5,7 @@
         <h1 class="page-title">Гостевые пропуска</h1>
         <p class="page-subtitle">Выдача временных пропусков и фото-фиксация посетителей с камер проходной.</p>
       </div>
-      <button class="btn-primary" @click="openNewDialog">
+      <button v-if="canManageGuests" class="btn-primary" @click="openNewDialog">
         <i class="pi pi-plus"></i> Выдать пропуск
       </button>
     </div>
@@ -37,7 +37,7 @@
           </div>
           <div class="card-actions">
             <button
-              v-if="isPassValid(guest.valid_until, guest.is_active)"
+              v-if="canManageGuests && isPassValid(guest.valid_until, guest.is_active)"
               class="btn-icon warning"
               @click="deactivateGuest(guest.id)"
               title="Аннулировать пропуск"
@@ -199,6 +199,10 @@ import { ref, onMounted, computed } from 'vue'
 import { guestsApi } from '../api/guests'
 import { camerasApi } from '../api/cameras'
 import { employeesApi } from '../api/employees'
+import { useAuth } from '../services/auth'
+
+const auth = useAuth()
+const canManageGuests = computed(() => auth.hasAnyRole('super_admin', 'checkpoint_operator', 'tech_hr'))
 
 const guests = ref([])
 const cameras = ref([])
@@ -346,6 +350,7 @@ const takeSnapshot = async () => {
 }
 
 const openNewDialog = () => {
+  if (!canManageGuests.value) return
   if (photoPreview.value) {
     URL.revokeObjectURL(photoPreview.value)
     photoPreview.value = null
@@ -381,6 +386,7 @@ const closeDialog = () => {
 }
 
 const saveGuest = async () => {
+  if (!canManageGuests.value) return
   if (!guestForm.value.last_name || !guestForm.value.first_name || !guestForm.value.valid_until || !guestForm.value.employee_id) {
     alert('Заполните обязательные поля: фамилия, имя, к кому пришли и срок действия')
     return
@@ -411,6 +417,7 @@ const saveGuest = async () => {
 }
 
 const deactivateGuest = async (id) => {
+  if (!canManageGuests.value) return
   if (confirm('Аннулировать пропуск? Гость больше не сможет пройти через турникет.')) {
     try {
       await guestsApi.deactivateGuest(id)

@@ -6,11 +6,24 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Field, Session, SQLModel, select
 
 from app.core.database import get_session
+from app.core.deps import require_roles
 from app.models.buildings import Building
-from app.models.floors import Floor
 from app.models.cameras import Camera
+from app.models.floors import Floor
+from app.models.user import UserRole
 
 router = APIRouter(prefix="/api/buildings", tags=["Здания"])
+
+READ_ROLES = (
+    UserRole.SUPER_ADMIN,
+    UserRole.CHECKPOINT_OPERATOR,
+    UserRole.MANAGER_ANALYST,
+    UserRole.TECH_HR,
+)
+WRITE_ROLES = (
+    UserRole.SUPER_ADMIN,
+    UserRole.TECH_HR,
+)
 
 
 class BuildingCreate(SQLModel):
@@ -34,7 +47,8 @@ class BuildingRead(SQLModel):
     "/",
     response_model=List[BuildingRead],
     summary="Получить список зданий",
-    description="Возвращает список всех зданий."
+    description="Возвращает список всех зданий.",
+    dependencies=[Depends(require_roles(*READ_ROLES))],
 )
 def get_buildings(session: Session = Depends(get_session)):
     statement = select(Building).order_by(Building.name.asc())
@@ -45,7 +59,8 @@ def get_buildings(session: Session = Depends(get_session)):
     "/{building_id}",
     response_model=BuildingRead,
     summary="Получить здание по ID",
-    description="Возвращает карточку здания."
+    description="Возвращает карточку здания.",
+    dependencies=[Depends(require_roles(*READ_ROLES))],
 )
 def get_building(building_id: int, session: Session = Depends(get_session)):
     building = session.get(Building, building_id)
@@ -62,7 +77,8 @@ def get_building(building_id: int, session: Session = Depends(get_session)):
     response_model=BuildingRead,
     status_code=status.HTTP_201_CREATED,
     summary="Создать здание",
-    description="Создает новое здание."
+    description="Создает новое здание.",
+    dependencies=[Depends(require_roles(*WRITE_ROLES))],
 )
 def create_building(payload: BuildingCreate, session: Session = Depends(get_session)):
     building = Building(
@@ -87,7 +103,8 @@ def create_building(payload: BuildingCreate, session: Session = Depends(get_sess
     "/{building_id}",
     response_model=BuildingRead,
     summary="Обновить здание",
-    description="Обновляет название и адрес здания."
+    description="Обновляет название и адрес здания.",
+    dependencies=[Depends(require_roles(*WRITE_ROLES))],
 )
 def update_building(
     building_id: int,
@@ -123,7 +140,8 @@ def update_building(
     "/{building_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Удалить здание",
-    description="Удаляет здание, его этажи и отвязывает камеры."
+    description="Удаляет здание, его этажи и отвязывает камеры.",
+    dependencies=[Depends(require_roles(*WRITE_ROLES))],
 )
 def delete_building(building_id: int, session: Session = Depends(get_session)):
     building = session.get(Building, building_id)

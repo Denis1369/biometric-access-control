@@ -161,6 +161,7 @@
 <script setup>
 import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
 import { camerasApi } from '../api/cameras'
+import { buildWsUrl } from '../api/client'
 import { analyticsApi } from '../api/analytics'
 import { guestsApi } from '../api/guests'
 import { employeesApi } from '../api/employees'
@@ -258,9 +259,7 @@ const startVideoFeed = () => {
   if (!selectedCameraId.value) return
   
   isVideoLoading.value = true
-  const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
-  const apiHost = `${window.location.hostname}:8000`
-  ws = new WebSocket(`${wsProtocol}://${apiHost}/ws/video/${selectedCameraId.value}`)
+  ws = new WebSocket(buildWsUrl(`/ws/video/${selectedCameraId.value}`))
   
   ws.binaryType = 'blob'
   

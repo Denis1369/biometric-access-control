@@ -5,7 +5,7 @@
         <h1 class="page-title">Камеры и Турникеты</h1>
         <p class="page-subtitle">Управление точками прохода и настройка направлений (Вход/Выход/Внутри).</p>
       </div>
-      <button class="btn-primary" @click="openNewDialog">
+      <button v-if="canManageCameras" class="btn-primary" @click="openNewDialog">
         <i class="pi pi-plus"></i> Добавить
       </button>
     </div>
@@ -46,10 +46,10 @@
             <button v-if="cam.is_active" class="btn-icon success" @click="openVideoDialog(cam)" title="Смотреть трансляцию">
               <i class="pi pi-eye"></i>
             </button>
-            <button class="btn-icon warning" @click="openEditDialog(cam)" title="Редактировать">
+            <button v-if="canManageCameras" class="btn-icon warning" @click="openEditDialog(cam)" title="Редактировать">
               <i class="pi pi-pencil"></i>
             </button>
-            <button class="btn-icon danger" @click="confirmDelete(cam.id)" title="Удалить">
+            <button v-if="canManageCameras" class="btn-icon danger" @click="confirmDelete(cam.id)" title="Удалить">
               <i class="pi pi-trash"></i>
             </button>
           </div>
@@ -162,6 +162,11 @@
 <script setup>
 import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
 import { camerasApi } from '../api/cameras'
+import { buildWsUrl } from '../api/client'
+import { useAuth } from '../services/auth'
+
+const auth = useAuth()
+const canManageCameras = computed(() => auth.hasAnyRole('super_admin', 'tech_hr'))
 
 const cameras = ref([])
 const displayDialog = ref(false)
@@ -259,12 +264,14 @@ const filteredCameras = computed(() => {
 })
 
 const openNewDialog = () => {
+  if (!canManageCameras.value) return
   isEditMode.value = false
   cameraForm.value = { id: null, name: '', ip_address: '', direction: 'internal', is_active: true }
   displayDialog.value = true
 }
 
 const openEditDialog = (camera) => {
+  if (!canManageCameras.value) return
   isEditMode.value = true
   cameraForm.value = { ...camera, direction: camera.direction || 'internal' }
   displayDialog.value = true
@@ -275,6 +282,7 @@ const closeDialog = () => {
 }
 
 const saveCamera = async () => {
+  if (!canManageCameras.value) return
   if (!cameraForm.value.name || !cameraForm.value.ip_address) {
     alert('Заполните название и адрес камеры')
     return
@@ -304,6 +312,7 @@ const saveCamera = async () => {
 }
 
 const confirmDelete = async (id) => {
+  if (!canManageCameras.value) return
   if (confirm('Точно удалить камеру из системы?')) {
     try {
       await camerasApi.deleteCamera(id)
@@ -324,9 +333,7 @@ const openVideoDialog = (camera) => {
   isVideoLoading.value = true
 
   const currentSession = ++wsSession
-  const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
-  const apiHost = `${window.location.hostname}:8000`
-  const socket = new WebSocket(`${wsProtocol}://${apiHost}/ws/video/${camera.id}`)
+  const socket = new WebSocket(buildWsUrl(`/ws/video/${camera.id}`))
 
   ws = socket
   socket.binaryType = 'blob'
