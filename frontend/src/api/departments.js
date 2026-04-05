@@ -10,9 +10,7 @@ export const departmentsApi = {
   updateDepartment(id, payload) {
     return apiClient.patch(`/departments/${id}`, payload)
   },
-  deleteDepartment(id) {
-    return apiClient.delete(`/departments/${id}`)
-  },
+
   applyGlobalSchedule(payload) {
     return apiClient.post('/departments/apply-global-schedule', payload)
   }

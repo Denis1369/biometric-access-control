@@ -1,7 +1,7 @@
+import os
 import threading
 import time
 from typing import Optional
-import os
 
 import cv2
 from sqlmodel import Session, select
@@ -70,37 +70,31 @@ class CameraStreamWorker:
             except Exception:
                 pass
 
-    def _open_capture(self) -> Optional[cv2.VideoCapture]:
+    def _open_capture(self):
         self._release_capture()
 
         if self.rtsp_url.startswith("rtsp://"):
-            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|stimeout;5000000"
+            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
+                "rtsp_transport;tcp|stimeout;2000000|rw_timeout;2000000|max_delay;500000"
+            )
 
-        backend = getattr(cv2, "CAP_FFMPEG", 0)
-        cap = cv2.VideoCapture(self.rtsp_url, backend) if backend else cv2.VideoCapture(self.rtsp_url)
+        cap = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
 
-        if not cap.isOpened():
+        if not cap or not cap.isOpened():
             try:
-                cap.release()
+                if cap:
+                    cap.release()
             except Exception:
                 pass
             return None
 
-        for prop_name, value in [
-            ("CAP_PROP_BUFFERSIZE", 1),
-            ("CAP_PROP_OPEN_TIMEOUT_MSEC", 5000),
-            ("CAP_PROP_READ_TIMEOUT_MSEC", 5000),
-        ]:
-            prop = getattr(cv2, prop_name, None)
-            if prop is not None:
-                try:
-                    cap.set(prop, value)
-                except Exception:
-                    pass
+        try:
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        except Exception:
+            pass
 
         with self.cap_lock:
             self.cap = cap
-
         return cap
 
     def _handle_access(self, image_bytes: bytes):
@@ -142,7 +136,7 @@ class CameraStreamWorker:
                     print(f"[Камера {self.camera_id}] Тревога: Неизвестное лицо!")
 
     def _process_loop(self):
-        reconnect_delay = 2
+        reconnect_delay = 1
         recognition_interval = 0.8
 
         while self.is_running:
@@ -242,9 +236,8 @@ class StreamManager:
     def get_latest_frame(self, camera_id: int, max_age_sec: float = 3.0):
         with self.lock:
             worker = self.workers.get(camera_id)
-
-        if worker:
-            return worker.get_latest_frame(max_age_sec=max_age_sec)
+            if worker:
+                return worker.get_latest_frame(max_age_sec=max_age_sec)
         return None
 
 

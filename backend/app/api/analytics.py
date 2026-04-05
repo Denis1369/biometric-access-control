@@ -17,14 +17,13 @@ from app.models.user import UserRole
 
 router = APIRouter(prefix="/api/analytics", tags=["Аналитика и Журналы"])
 
+
 BASIC_ANALYTICS_ROLES = (
     UserRole.SUPER_ADMIN,
     UserRole.CHECKPOINT_OPERATOR,
-    UserRole.MANAGER_ANALYST,
 )
 FULL_ANALYTICS_ROLES = (
     UserRole.SUPER_ADMIN,
-    UserRole.MANAGER_ANALYST,
 )
 
 

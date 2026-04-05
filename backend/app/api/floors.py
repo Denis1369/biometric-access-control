@@ -17,13 +17,10 @@ router = APIRouter(prefix="/api/floors", tags=["Этажи"])
 READ_ROLES = (
     UserRole.SUPER_ADMIN,
     UserRole.CHECKPOINT_OPERATOR,
-    UserRole.MANAGER_ANALYST,
-    UserRole.TECH_HR,
-)
+    )
 WRITE_ROLES = (
     UserRole.SUPER_ADMIN,
-    UserRole.TECH_HR,
-)
+    )
 
 
 class FloorRead(SQLModel):
@@ -248,28 +245,3 @@ async def update_floor(
         )
 
 
-@router.delete(
-    "/{floor_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-    summary="Удалить этаж",
-    description="Удаляет этаж, отвязывает камеры и удаляет план этажа.",
-    dependencies=[Depends(require_roles(*WRITE_ROLES))],
-)
-def delete_floor(floor_id: int, session: Session = Depends(get_session)):
-    floor = session.get(Floor, floor_id)
-    if not floor:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Этаж не найден",
-        )
-
-    cameras = session.exec(select(Camera).where(Camera.floor_id == floor_id)).all()
-    for camera in cameras:
-        camera.floor_id = None
-        camera.plan_x = None
-        camera.plan_y = None
-        session.add(camera)
-
-    session.delete(floor)
-    session.commit()
-    return None

@@ -17,18 +17,14 @@ router = APIRouter(prefix="/api/cameras", tags=["Камеры"])
 READ_ROLES = (
     UserRole.SUPER_ADMIN,
     UserRole.CHECKPOINT_OPERATOR,
-    UserRole.MANAGER_ANALYST,
-    UserRole.TECH_HR,
-)
+    )
 WRITE_ROLES = (
     UserRole.SUPER_ADMIN,
-    UserRole.TECH_HR,
-)
+    )
 SNAPSHOT_ROLES = (
     UserRole.SUPER_ADMIN,
     UserRole.CHECKPOINT_OPERATOR,
-    UserRole.TECH_HR,
-)
+    )
 
 
 class CameraCreate(SQLModel):
@@ -298,26 +294,6 @@ def update_camera(
         )
 
 
-@router.delete(
-    "/{camera_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-    summary="Удалить камеру",
-    description="Удаляет камеру.",
-    dependencies=[Depends(require_roles(*WRITE_ROLES))],
-)
-def delete_camera(camera_id: int, session: Session = Depends(get_session)):
-    camera = session.get(Camera, camera_id)
-    if not camera:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Камера не найдена",
-        )
-
-    session.delete(camera)
-    session.commit()
-
-    stream_manager.remove_camera(camera_id)
-    return None
 
 
 @router.get(

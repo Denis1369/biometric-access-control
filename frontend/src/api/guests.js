@@ -21,8 +21,4 @@ export const guestsApi = {
   deactivateGuest(id) {
     return apiClient.patch(`/guests/${id}/deactivate`)
   },
-
-  deleteGuest(id) {
-    return apiClient.delete(`/guests/${id}`)
-  }
 }

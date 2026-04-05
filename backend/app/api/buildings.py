@@ -17,13 +17,10 @@ router = APIRouter(prefix="/api/buildings", tags=["Здания"])
 READ_ROLES = (
     UserRole.SUPER_ADMIN,
     UserRole.CHECKPOINT_OPERATOR,
-    UserRole.MANAGER_ANALYST,
-    UserRole.TECH_HR,
-)
+    )
 WRITE_ROLES = (
     UserRole.SUPER_ADMIN,
-    UserRole.TECH_HR,
-)
+    )
 
 
 class BuildingCreate(SQLModel):
@@ -136,33 +133,3 @@ def update_building(
         )
 
 
-@router.delete(
-    "/{building_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-    summary="Удалить здание",
-    description="Удаляет здание, его этажи и отвязывает камеры.",
-    dependencies=[Depends(require_roles(*WRITE_ROLES))],
-)
-def delete_building(building_id: int, session: Session = Depends(get_session)):
-    building = session.get(Building, building_id)
-    if not building:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Здание не найдено",
-        )
-
-    cameras = session.exec(
-        select(Camera).where(Camera.building_id == building_id)
-    ).all()
-    for camera in cameras:
-        camera.building_id = None
-        camera.floor_id = None
-        session.add(camera)
-
-    floors = session.exec(select(Floor).where(Floor.building_id == building_id)).all()
-    for floor in floors:
-        session.delete(floor)
-
-    session.delete(building)
-    session.commit()
-    return None

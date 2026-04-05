@@ -44,9 +44,6 @@
             <button v-if="canManageEmployees" class="btn-icon" @click="openEditDialog(emp)" title="Редактировать">
               <i class="pi pi-pencil"></i>
             </button>
-            <button v-if="canManageEmployees" class="btn-icon danger" @click="confirmDelete(emp.id)" title="Удалить">
-              <i class="pi pi-trash"></i>
-            </button>
           </div>
         </div>
 
@@ -97,7 +94,6 @@
               <img :src="photo.url" />
               <div class="photo-actions">
                 <button @click.prevent="setPrimary('existing', photo.id)" title="Сделать главной"><i class="pi pi-star-fill"></i></button>
-                <button class="danger" @click.prevent="removeExistingPhoto(photo.id)" title="Удалить"><i class="pi pi-trash"></i></button>
               </div>
               <div class="primary-badge" v-if="primaryPhoto.type === 'existing' && primaryPhoto.idOrIndex === photo.id">Главная</div>
             </div>
@@ -106,7 +102,6 @@
               <img :src="photo.url" />
               <div class="photo-actions">
                 <button @click.prevent="setPrimary('new', index)" title="Сделать главной"><i class="pi pi-star-fill"></i></button>
-                <button class="danger" @click.prevent="removeNewPhoto(index)" title="Удалить"><i class="pi pi-trash"></i></button>
               </div>
               <div class="primary-badge" v-if="primaryPhoto.type === 'new' && primaryPhoto.idOrIndex === index">Новая главная</div>
             </div>
@@ -167,7 +162,7 @@ import { departmentsApi } from '../api/departments'
 import { useAuth } from '../services/auth'
 
 const auth = useAuth()
-const canManageEmployees = computed(() => auth.hasAnyRole('super_admin', 'tech_hr'))
+const canManageEmployees = computed(() => auth.hasAnyRole('super_admin'))
 
 const employees = ref([])
 const departments = ref([])
@@ -261,23 +256,6 @@ const onFileSelected = (event) => {
   event.target.value = '' 
 }
 
-const removeExistingPhoto = (id) => {
-  removedPhotoIds.value.push(id)
-  existingPhotos.value = existingPhotos.value.filter(p => p.id !== id)
-  if (primaryPhoto.value.type === 'existing' && primaryPhoto.value.idOrIndex === id) {
-    autoSetPrimary()
-  }
-}
-
-const removeNewPhoto = (index) => {
-  URL.revokeObjectURL(newPhotos.value[index].url)
-  newPhotos.value.splice(index, 1)
-  if (primaryPhoto.value.type === 'new' && primaryPhoto.value.idOrIndex === index) {
-    autoSetPrimary()
-  } else if (primaryPhoto.value.type === 'new' && primaryPhoto.value.idOrIndex > index) {
-    primaryPhoto.value.idOrIndex -= 1 
-  }
-}
 
 const openNewDialog = () => {
   if (!canManageEmployees.value) return
@@ -379,17 +357,6 @@ const saveEmployee = async () => {
   }
 }
 
-const confirmDelete = async (id) => {
-  if (!canManageEmployees.value) return
-  if (confirm('Точно удалить сотрудника? Это действие необратимо.')) {
-    try {
-      await employeesApi.deleteEmployee(id)
-      await loadData()
-    } catch (error) {
-      alert('Ошибка при удалении. Возможно, с сотрудником связаны записи в журнале.')
-    }
-  }
-}
 
 onMounted(() => {
   loadData()

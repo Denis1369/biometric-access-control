@@ -300,7 +300,7 @@ import { buildWsUrl } from '../api/client'
 import { useAuth } from '../services/auth'
 
 const auth = useAuth()
-const canEditPlan = computed(() => auth.hasAnyRole('super_admin', 'tech_hr'))
+const canEditPlan = computed(() => auth.hasAnyRole('super_admin'))
 
 const logs = ref([])
 const employees = ref([])

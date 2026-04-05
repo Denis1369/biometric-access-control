@@ -11,11 +11,10 @@ from app.services.stream_manager import stream_manager
 
 router = APIRouter()
 
+
 ALLOWED_ROLES = {
     UserRole.SUPER_ADMIN,
     UserRole.CHECKPOINT_OPERATOR,
-    UserRole.MANAGER_ANALYST,
-    UserRole.TECH_HR,
 }
 
 

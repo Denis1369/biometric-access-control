@@ -12,7 +12,7 @@ python-dotenv
 
 # Auth & Security
 python-jose[cryptography]
-passlib==1.7.4
+passlib[bcrypt]
 bcrypt==4.0.1
 
 # Computer Vision & ML

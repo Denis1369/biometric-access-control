@@ -19,13 +19,10 @@ router = APIRouter(prefix="/api/employees", tags=["Сотрудники"])
 READ_ROLES = (
     UserRole.SUPER_ADMIN,
     UserRole.CHECKPOINT_OPERATOR,
-    UserRole.MANAGER_ANALYST,
-    UserRole.TECH_HR,
-)
+    )
 WRITE_ROLES = (
     UserRole.SUPER_ADMIN,
-    UserRole.TECH_HR,
-)
+    )
 
 
 class EmployeeFaceSampleRead(SQLModel):
@@ -272,6 +269,11 @@ async def update_employee(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Отдел с id={department_id} не найден")
 
     delete_ids = parse_delete_sample_ids(delete_sample_ids)
+    if delete_ids:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Удаление фотографий отключено на текущем этапе",
+        )
     new_photos = photos or []
 
     existing_samples = session.exec(select(EmployeeFaceSample).where(EmployeeFaceSample.employee_id == employee.id)).all()
@@ -414,20 +416,3 @@ async def update_employee(
         )
 
 
-@router.delete(
-    "/{employee_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(require_roles(*WRITE_ROLES))],
-)
-def delete_employee(employee_id: int, session: Session = Depends(get_session)):
-    employee = session.get(Employee, employee_id)
-    if not employee:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Сотрудник не найден")
-
-    samples = session.exec(select(EmployeeFaceSample).where(EmployeeFaceSample.employee_id == employee.id)).all()
-    for sample in samples:
-        session.delete(sample)
-
-    session.delete(employee)
-    session.commit()
-    return None

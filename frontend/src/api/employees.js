@@ -28,8 +28,4 @@ export const employeesApi = {
       }
     })
   },
-
-  deleteEmployee(id) {
-    return apiClient.delete(`/employees/${id}`)
-  }
 }

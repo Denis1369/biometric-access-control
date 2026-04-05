@@ -33,8 +33,4 @@ export const floorsApi = {
       }
     })
   },
-
-  deleteFloor(id) {
-    return apiClient.delete(`/floors/${id}`)
-  }
 }

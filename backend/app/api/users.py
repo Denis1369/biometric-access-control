@@ -11,6 +11,11 @@ from app.models.user import User, UserRole
 
 router = APIRouter(prefix="/api/users", tags=["Пользователи"])
 
+PRACTICE_ROLES = {
+    UserRole.SUPER_ADMIN,
+    UserRole.CHECKPOINT_OPERATOR,
+}
+
 
 class UserRead(SQLModel):
     id: int
@@ -70,6 +75,14 @@ def validate_employee_link(session: Session, employee_id: int | None, ignore_use
         raise HTTPException(status_code=400, detail="Этот сотрудник уже привязан к другому пользователю")
 
 
+def validate_practice_role(role: UserRole) -> None:
+    if role not in PRACTICE_ROLES:
+        raise HTTPException(
+            status_code=400,
+            detail="На текущем этапе доступны только роли super_admin и checkpoint_operator",
+        )
+
+
 @router.get(
     "/",
     response_model=List[UserRead],
@@ -92,6 +105,8 @@ def create_user(payload: UserCreate, session: Session = Depends(get_session)):
         raise HTTPException(status_code=400, detail="Логин должен содержать минимум 3 символа")
     if len(payload.password) < 6:
         raise HTTPException(status_code=400, detail="Пароль должен содержать минимум 6 символов")
+
+    validate_practice_role(payload.role)
 
     exists = session.exec(select(User).where(User.username == username)).first()
     if exists:
@@ -143,6 +158,7 @@ def update_user(
         user.employee_id = data["employee_id"]
 
     if "role" in data:
+        validate_practice_role(data["role"])
         if current_user.id == user.id and data["role"] != UserRole.SUPER_ADMIN:
             raise HTTPException(status_code=400, detail="Нельзя снять роль super_admin у своей учетной записи")
         user.role = data["role"]

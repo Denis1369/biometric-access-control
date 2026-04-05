@@ -40,9 +40,6 @@
             <button class="btn-icon warning" @click="openEditDialog(slotProps.data)" title="Редактировать">
               <i class="pi pi-pencil"></i>
             </button>
-            <button class="btn-icon danger" @click="confirmDelete(slotProps.data.id)" title="Удалить">
-              <i class="pi pi-trash"></i>
-            </button>
           </div>
         </template>
       </Column>
@@ -134,7 +131,7 @@ import { departmentsApi } from '../api/departments'
 import { useAuth } from '../services/auth'
 
 const auth = useAuth()
-const canManageDepartments = computed(() => auth.hasAnyRole('super_admin', 'tech_hr'))
+const canManageDepartments = computed(() => auth.hasAnyRole('super_admin'))
 
 const departments = ref([])
 const displayDialog = ref(false)
@@ -197,17 +194,6 @@ const saveDepartment = async () => {
   }
 }
 
-const confirmDelete = async (id) => {
-  if (!canManageDepartments.value) return
-  if (confirm('Точно удалить отдел? Это может вызвать ошибку, если к нему привязаны сотрудники.')) {
-    try {
-      await departmentsApi.deleteDepartment(id)
-      await loadData()
-    } catch (e) {
-      alert('Невозможно удалить отдел, в котором есть сотрудники.')
-    }
-  }
-}
 
 const openGlobalScheduleDialog = () => {
   if (!canManageDepartments.value) return

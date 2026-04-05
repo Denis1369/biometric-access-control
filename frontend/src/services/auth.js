@@ -17,9 +17,7 @@ const state = reactive({
 
 const roleHomeMap = {
   super_admin: '/',
-  manager_analyst: '/',
   checkpoint_operator: '/route',
-  tech_hr: '/employees',
 }
 
 function clearState() {

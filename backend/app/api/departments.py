@@ -15,13 +15,10 @@ router = APIRouter(prefix="/api/departments", tags=["Отделы"])
 READ_ROLES = (
     UserRole.SUPER_ADMIN,
     UserRole.CHECKPOINT_OPERATOR,
-    UserRole.MANAGER_ANALYST,
-    UserRole.TECH_HR,
-)
+    )
 WRITE_ROLES = (
     UserRole.SUPER_ADMIN,
-    UserRole.TECH_HR,
-)
+    )
 
 
 class GlobalScheduleUpdate(BaseModel):
@@ -95,15 +92,3 @@ def apply_global_schedule(schedule: GlobalScheduleUpdate, session: Session = Dep
     return {"message": "Успешно применено ко всем отделам"}
 
 
-@router.delete(
-    "/{department_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(require_roles(*WRITE_ROLES))],
-)
-def delete_department(department_id: int, session: Session = Depends(get_session)):
-    department = session.get(Department, department_id)
-    if not department:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Отдел не найден")
-    session.delete(department)
-    session.commit()
-    return None

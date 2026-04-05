@@ -63,18 +63,16 @@ const router = useRouter()
 const roleLabels = {
   super_admin: 'Super Admin',
   checkpoint_operator: 'Оператор КПП',
-  manager_analyst: 'Руководитель / Аналитик',
-  tech_hr: 'Техник / HR',
 }
 
 const navItems = [
-  { to: '/', label: 'Дашборд', icon: 'pi pi-home', roles: ['super_admin', 'manager_analyst'] },
-  { to: '/employees', label: 'Сотрудники', icon: 'pi pi-users', roles: ['super_admin', 'checkpoint_operator', 'manager_analyst', 'tech_hr'] },
-  { to: '/cameras', label: 'Камеры', icon: 'pi pi-video', roles: ['super_admin', 'checkpoint_operator', 'manager_analyst', 'tech_hr'] },
-  { to: '/route', label: 'Проходная', icon: 'pi pi-sign-in', roles: ['super_admin', 'checkpoint_operator', 'tech_hr'] },
-  { to: '/tracking', label: 'План здания', icon: 'pi pi-building', roles: ['super_admin', 'tech_hr'] },
-  { to: '/departments', label: 'Отделы', icon: 'pi pi-sitemap', roles: ['super_admin', 'tech_hr'] },
-  { to: '/guests', label: 'Гости', icon: 'pi pi-user-plus', roles: ['super_admin', 'checkpoint_operator', 'manager_analyst', 'tech_hr'] },
+  { to: '/', label: 'Дашборд', icon: 'pi pi-home', roles: ['super_admin'] },
+  { to: '/employees', label: 'Сотрудники', icon: 'pi pi-users', roles: ['super_admin', 'checkpoint_operator'] },
+  { to: '/cameras', label: 'Камеры', icon: 'pi pi-video', roles: ['super_admin', 'checkpoint_operator'] },
+  { to: '/route', label: 'Проходная', icon: 'pi pi-sign-in', roles: ['super_admin', 'checkpoint_operator'] },
+  { to: '/tracking', label: 'План здания', icon: 'pi pi-building', roles: ['super_admin', 'checkpoint_operator'] },
+  { to: '/guests', label: 'Гости', icon: 'pi pi-user-plus', roles: ['super_admin', 'checkpoint_operator'] },
+  { to: '/departments', label: 'Отделы', icon: 'pi pi-sitemap', roles: ['super_admin'] },
   { to: '/users', label: 'Пользователи', icon: 'pi pi-lock', roles: ['super_admin'] },
 ]
 

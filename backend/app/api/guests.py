@@ -16,19 +16,11 @@ router = APIRouter(prefix="/api/guests", tags=["Гости"])
 READ_ROLES = (
     UserRole.SUPER_ADMIN,
     UserRole.CHECKPOINT_OPERATOR,
-    UserRole.MANAGER_ANALYST,
-    UserRole.TECH_HR,
-)
+    )
 WRITE_ROLES = (
     UserRole.SUPER_ADMIN,
     UserRole.CHECKPOINT_OPERATOR,
-    UserRole.TECH_HR,
-)
-DELETE_ROLES = (
-    UserRole.SUPER_ADMIN,
-    UserRole.TECH_HR,
-)
-
+    )
 
 class GuestRead(SQLModel):
     id: int
@@ -149,23 +141,6 @@ def deactivate_guest(guest_id: int, session: Session = Depends(get_session)):
     return {"status": "ok", "message": "Пропуск успешно аннулирован"}
 
 
-@router.delete(
-    "/{guest_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(require_roles(*DELETE_ROLES))],
-)
-def delete_guest(guest_id: int, session: Session = Depends(get_session)):
-    guest = session.get(Guest, guest_id)
-    if not guest:
-        raise HTTPException(status_code=404, detail="Гость не найден")
-
-    samples = session.exec(select(GuestFaceSample).where(GuestFaceSample.guest_id == guest.id)).all()
-    for sample in samples:
-        session.delete(sample)
-
-    session.delete(guest)
-    session.commit()
-    return None
 
 
 @router.get(

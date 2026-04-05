@@ -3,7 +3,7 @@
     <div class="header-actions">
       <div>
         <h1 class="page-title">Пользователи системы</h1>
-        <p class="page-subtitle">Создание учетных записей, назначение ролей и привязка к сотрудникам.</p>
+        <p class="page-subtitle">Создание учетных записей для super admin и операторов КПП.</p>
       </div>
       <button class="btn-primary" @click="openCreateDialog">
         <i class="pi pi-plus"></i> Новый пользователь
@@ -116,18 +116,15 @@ const employees = ref([])
 const displayDialog = ref(false)
 const isEditMode = ref(false)
 
+
 const roleLabels = {
   super_admin: 'Super Admin',
   checkpoint_operator: 'Оператор КПП',
-  manager_analyst: 'Руководитель / Аналитик',
-  tech_hr: 'Техник / HR',
 }
 
 const roleOptions = [
   { value: 'super_admin', label: 'Super Admin' },
   { value: 'checkpoint_operator', label: 'Оператор КПП' },
-  { value: 'manager_analyst', label: 'Руководитель / Аналитик' },
-  { value: 'tech_hr', label: 'Техник / HR' },
 ]
 
 const form = ref({

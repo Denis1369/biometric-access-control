@@ -49,9 +49,6 @@
             <button v-if="canManageCameras" class="btn-icon warning" @click="openEditDialog(cam)" title="Редактировать">
               <i class="pi pi-pencil"></i>
             </button>
-            <button v-if="canManageCameras" class="btn-icon danger" @click="confirmDelete(cam.id)" title="Удалить">
-              <i class="pi pi-trash"></i>
-            </button>
           </div>
         </div>
 
@@ -166,7 +163,7 @@ import { buildWsUrl } from '../api/client'
 import { useAuth } from '../services/auth'
 
 const auth = useAuth()
-const canManageCameras = computed(() => auth.hasAnyRole('super_admin', 'tech_hr'))
+const canManageCameras = computed(() => auth.hasAnyRole('super_admin'))
 
 const cameras = ref([])
 const displayDialog = ref(false)
@@ -311,17 +308,6 @@ const saveCamera = async () => {
   }
 }
 
-const confirmDelete = async (id) => {
-  if (!canManageCameras.value) return
-  if (confirm('Точно удалить камеру из системы?')) {
-    try {
-      await camerasApi.deleteCamera(id)
-      await loadData()
-    } catch (error) {
-      console.error('Ошибка удаления камеры', error)
-    }
-  }
-}
 
 const openVideoDialog = (camera) => {
   manualVideoClose = false

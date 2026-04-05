@@ -202,7 +202,7 @@ import { employeesApi } from '../api/employees'
 import { useAuth } from '../services/auth'
 
 const auth = useAuth()
-const canManageGuests = computed(() => auth.hasAnyRole('super_admin', 'checkpoint_operator', 'tech_hr'))
+const canManageGuests = computed(() => auth.hasAnyRole('super_admin', 'checkpoint_operator'))
 
 const guests = ref([])
 const cameras = ref([])
