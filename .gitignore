@@ -61,3 +61,5 @@ yarn-error.log*
 # Мусорные файлы операционных систем
 .DS_Store
 Thumbs.db
+
+storage

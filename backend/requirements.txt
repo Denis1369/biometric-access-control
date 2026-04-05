@@ -10,12 +10,8 @@ pymysql
 # Environment
 python-dotenv
 
-# Auth & Security
-python-jose[cryptography]
-passlib[bcrypt]
-bcrypt==4.0.1
-
 # Computer Vision & ML
 opencv-python
 ultralytics
 deepface
+av

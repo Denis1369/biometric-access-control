@@ -71,6 +71,7 @@ const navItems = [
   { to: '/cameras', label: 'Камеры', icon: 'pi pi-video', roles: ['super_admin', 'checkpoint_operator'] },
   { to: '/route', label: 'Проходная', icon: 'pi pi-sign-in', roles: ['super_admin', 'checkpoint_operator'] },
   { to: '/tracking', label: 'План здания', icon: 'pi pi-building', roles: ['super_admin', 'checkpoint_operator'] },
+  { to: '/video-analysis', label: 'Анализ видео', icon: 'pi pi-play-circle', roles: ['super_admin', 'checkpoint_operator'] },
   { to: '/guests', label: 'Гости', icon: 'pi pi-user-plus', roles: ['super_admin', 'checkpoint_operator'] },
   { to: '/departments', label: 'Отделы', icon: 'pi pi-sitemap', roles: ['super_admin'] },
   { to: '/users', label: 'Пользователи', icon: 'pi pi-lock', roles: ['super_admin'] },
