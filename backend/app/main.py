@@ -5,7 +5,20 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import SQLModel
 
 import app.models  # noqa: F401
-from app.api import analytics, auth, buildings, cameras, departments, employees, floors, guests, users, video_analysis, websockets
+from app.api import (
+    analytics,
+    auth,
+    buildings,
+    cameras,
+    departments,
+    employees,
+    floors,
+    guests,
+    job_positions,
+    users,
+    video_analysis,
+    websockets,
+)
 from app.core.database import engine
 from app.services.stream_manager import stream_manager
 
@@ -41,16 +54,17 @@ app.add_middleware(
 )
 
 app.include_router(auth.router)
-app.include_router(users.router)
-app.include_router(video_analysis.router)
 app.include_router(employees.router)
 app.include_router(departments.router)
+app.include_router(job_positions.router)
 app.include_router(cameras.router)
 app.include_router(websockets.router)
 app.include_router(analytics.router)
 app.include_router(buildings.router)
 app.include_router(floors.router)
 app.include_router(guests.router)
+app.include_router(users.router)
+app.include_router(video_analysis.router)
 
 
 @app.get("/")

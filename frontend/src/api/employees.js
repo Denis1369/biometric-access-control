@@ -27,5 +27,5 @@ export const employeesApi = {
         'Content-Type': 'multipart/form-data'
       }
     })
-  },
+  }
 }

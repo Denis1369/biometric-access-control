@@ -1,5 +1,6 @@
 from sqlmodel import SQLModel, Field
 
+
 class Employee(SQLModel, table=True):
     __tablename__ = "employees"
 

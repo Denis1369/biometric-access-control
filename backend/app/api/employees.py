@@ -19,10 +19,10 @@ router = APIRouter(prefix="/api/employees", tags=["Сотрудники"])
 READ_ROLES = (
     UserRole.SUPER_ADMIN,
     UserRole.CHECKPOINT_OPERATOR,
-    )
+)
 WRITE_ROLES = (
     UserRole.SUPER_ADMIN,
-    )
+)
 
 
 class EmployeeFaceSampleRead(SQLModel):
@@ -36,6 +36,7 @@ class EmployeeListItem(SQLModel):
     last_name: str
     first_name: str
     middle_name: str | None = None
+    position: str | None = None
     department_id: int | None = None
     is_active: bool
     primary_sample_id: int | None = None
@@ -71,8 +72,8 @@ def parse_delete_sample_ids(raw: str | None) -> list[int]:
                 detail="delete_sample_ids должен содержать только целые id",
             )
         result.append(item)
-
     return result
+
 
 
 def build_employee_list_item(session: Session, employee: Employee) -> EmployeeListItem:
@@ -87,10 +88,12 @@ def build_employee_list_item(session: Session, employee: Employee) -> EmployeeLi
         last_name=employee.last_name,
         first_name=employee.first_name,
         middle_name=employee.middle_name,
+        position=employee.position,
         department_id=employee.department_id,
         is_active=employee.is_active,
         primary_sample_id=sample.id if sample else None,
     )
+
 
 
 def build_employee_detail(session: Session, employee: Employee) -> EmployeeDetail:
@@ -99,13 +102,14 @@ def build_employee_detail(session: Session, employee: Employee) -> EmployeeDetai
         .where(EmployeeFaceSample.employee_id == employee.id)
         .order_by(EmployeeFaceSample.is_primary.desc(), EmployeeFaceSample.id.asc())
     ).all()
-
     primary_id = samples[0].id if samples else None
+
     return EmployeeDetail(
         id=employee.id,
         last_name=employee.last_name,
         first_name=employee.first_name,
         middle_name=employee.middle_name,
+        position=employee.position,
         department_id=employee.department_id,
         is_active=employee.is_active,
         primary_sample_id=primary_id,
@@ -164,6 +168,7 @@ async def create_employee(
     last_name: str = Form(...),
     first_name: str = Form(...),
     middle_name: str | None = Form(None),
+    position: str | None = Form(None),
     department_id: int = Form(...),
     primary_index: int = Form(0),
     photos: list[UploadFile] = File(...),
@@ -183,6 +188,7 @@ async def create_employee(
         last_name=last_name.strip(),
         first_name=first_name.strip(),
         middle_name=middle_name.strip() if middle_name else None,
+        position=position.strip() if position else None,
         department_id=department_id,
         is_active=True,
     )
@@ -252,6 +258,7 @@ async def update_employee(
     last_name: str | None = Form(None),
     first_name: str | None = Form(None),
     middle_name: str | None = Form(None),
+    position: str | None = Form(None),
     department_id: int | None = Form(None),
     is_active: bool | None = Form(None),
     primary_photo: str | None = Form(None),
@@ -274,17 +281,10 @@ async def update_employee(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Удаление фотографий отключено на текущем этапе",
         )
-    new_photos = photos or []
 
+    new_photos = photos or []
     existing_samples = session.exec(select(EmployeeFaceSample).where(EmployeeFaceSample.employee_id == employee.id)).all()
     existing_by_id = {sample.id: sample for sample in existing_samples}
-
-    for sample_id in delete_ids:
-        if sample_id not in existing_by_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Фото с id={sample_id} не принадлежит сотруднику",
-            )
 
     primary_existing_id: int | None = None
     primary_new_index: int | None = None
@@ -297,11 +297,6 @@ async def update_employee(
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Некорректный формат primary_photo")
             if primary_existing_id not in existing_by_id:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Указанная основная фотография не найдена")
-            if primary_existing_id in delete_ids:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Нельзя сделать основной фотографию, которая помечена на удаление",
-                )
         elif primary_photo.startswith("new:"):
             try:
                 primary_new_index = int(primary_photo.split(":", 1)[1])
@@ -324,6 +319,8 @@ async def update_employee(
         employee.first_name = first_name.strip()
     if middle_name is not None:
         employee.middle_name = middle_name.strip() if middle_name else None
+    if position is not None:
+        employee.position = position.strip() if position else None
     if department_id is not None:
         employee.department_id = department_id
     if is_active is not None:
@@ -334,16 +331,13 @@ async def update_employee(
         session.flush()
 
         old_primary_id = next(
-            (sample.id for sample in existing_samples if sample.is_primary and sample.id not in delete_ids),
+            (sample.id for sample in existing_samples if sample.is_primary),
             None,
         )
 
-        for sample_id in delete_ids:
-            session.delete(existing_by_id[sample_id])
-
-        remaining_existing_samples = [sample for sample in existing_samples if sample.id not in delete_ids]
-
+        remaining_existing_samples = list(existing_samples)
         new_samples: list[EmployeeFaceSample] = []
+
         for index, photo in enumerate(new_photos):
             image_bytes = await photo.read()
             if not image_bytes:
@@ -414,5 +408,3 @@ async def update_employee(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Ошибка при обновлении сотрудника: {str(e)}",
         )
-
-

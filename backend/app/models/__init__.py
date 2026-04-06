@@ -8,3 +8,4 @@ from .floors import Floor
 from .guests import Guest, GuestFaceSample
 from .user import User, UserRole
 from .video_analysis import VideoAnalysisEvent, VideoAnalysisJob
+from .job_positions import JobPosition
