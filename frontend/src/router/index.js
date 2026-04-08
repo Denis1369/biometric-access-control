@@ -20,7 +20,7 @@ const routes = [
     path: '/employees',
     name: 'employees',
     component: () => import('../views/Employees.vue'),
-    meta: { roles: ['super_admin', 'checkpoint_operator'] },
+    meta: { roles: ['super_admin'] },
   },
   {
     path: '/cameras',
@@ -44,7 +44,7 @@ const routes = [
     path: '/video-analysis',
     name: 'video-analysis',
     component: () => import('../views/VideoAnalysis.vue'),
-    meta: { roles: ['super_admin', 'checkpoint_operator'] },
+    meta: { roles: ['super_admin'] },
   },
   {
     path: '/departments',

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import numpy as np
+import threading
+import queue
 
 try:
-    import av  # type: ignore
-except Exception:  # pragma: no cover - optional dependency import safety
+    import av 
+except Exception:
     av = None
 
 
@@ -56,24 +58,66 @@ class PyAVFrameReader(BaseFrameReader):
             self.video_stream.thread_type = "SLICE"
         except Exception:
             pass
+            
         self._iterator = self.container.decode(video=0)
         self._is_live = is_live
 
-    def read(self) -> tuple[np.ndarray, float | None] | None:
-        try:
-            frame = next(self._iterator)
-        except StopIteration:
-            return None
-        except av.error.EOFError:
-            return None
-        except Exception as exc:
-            raise RuntimeError(str(exc)) from exc
+        if self._is_live:
+            self._q = queue.Queue(maxsize=1)
+            self._stop_event = threading.Event()
+            self._thread = threading.Thread(target=self._reader_thread, daemon=True)
+            self._thread.start()
 
-        array = frame.to_ndarray(format="bgr24")
-        timestamp = float(frame.time) if frame.time is not None else None
-        return array, timestamp
+    def _reader_thread(self):
+        """Фоновый поток, который выкачивает кадры максимально быстро и хранит только последний"""
+        try:
+            for frame in self._iterator:
+                if self._stop_event.is_set():
+                    break
+                
+                # Конвертируем в ndarray прямо здесь, снимая нагрузку с основного потока
+                array = frame.to_ndarray(format="bgr24")
+                timestamp = float(frame.time) if frame.time is not None else None
+
+                if self._q.full():
+                    try:
+                        self._q.get_nowait()
+                    except queue.Empty:
+                        pass
+                        
+                self._q.put((array, timestamp))
+        except Exception:
+            pass
+
+    def read(self) -> tuple[np.ndarray, float | None] | None:
+        if self._is_live:
+            try:
+                return self._q.get(timeout=5.0)
+            except queue.Empty:
+                return None
+        else:
+            try:
+                frame = next(self._iterator)
+            except StopIteration:
+                return None
+            except av.error.EOFError:
+                return None
+            except Exception as exc:
+                raise RuntimeError(str(exc)) from exc
+
+            array = frame.to_ndarray(format="bgr24")
+            timestamp = float(frame.time) if frame.time is not None else None
+            return array, timestamp
 
     def close(self) -> None:
+        if getattr(self, "_is_live", False):
+            self._stop_event.set()
+            while not self._q.empty():
+                try:
+                    self._q.get_nowait()
+                except queue.Empty:
+                    break
+                    
         try:
             self.container.close()
         except Exception:

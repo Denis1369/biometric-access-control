@@ -78,6 +78,12 @@ async def create_guest(
     photo: UploadFile = File(...),
     session: Session = Depends(get_session),
 ):
+    if valid_until < datetime.now():
+        raise HTTPException(
+            status_code=400, 
+            detail="Нельзя выдать пропуск задним числом. Укажите время в будущем."
+        )
+    
     employee = session.get(Employee, employee_id)
     if not employee:
         raise HTTPException(status_code=400, detail=f"Сотрудник с id={employee_id} не найден")

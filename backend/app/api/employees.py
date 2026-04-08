@@ -18,7 +18,6 @@ router = APIRouter(prefix="/api/employees", tags=["Сотрудники"])
 
 READ_ROLES = (
     UserRole.SUPER_ADMIN,
-    UserRole.CHECKPOINT_OPERATOR,
 )
 WRITE_ROLES = (
     UserRole.SUPER_ADMIN,
