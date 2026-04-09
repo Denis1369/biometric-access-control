@@ -1,4 +1,11 @@
 import os
+
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
 import platform
 import threading
 
@@ -15,13 +22,10 @@ _face_app_infer_lock = threading.Lock()
 
 def _choose_providers() -> list[str]:
     available = set(ort.get_available_providers())
-
-    if platform.system() == "Windows" and "DmlExecutionProvider" in available:
-        return ["DmlExecutionProvider", "CPUExecutionProvider"]
-
+    
     if "CUDAExecutionProvider" in available:
         return ["CUDAExecutionProvider", "CPUExecutionProvider"]
-
+        
     return ["CPUExecutionProvider"]
 
 

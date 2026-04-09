@@ -8,8 +8,8 @@ from app.models.guests import GuestFaceSample, Guest
 from app.models.logs import AccessLog
 from app.services.photo_conversion import extract_face_encoding
 
-INSIGHTFACE_COSINE_DISTANCE_AUTO_ALLOW = 0.70
-INSIGHTFACE_COSINE_DISTANCE_REVIEW = 0.72
+INSIGHTFACE_COSINE_DISTANCE_AUTO_ALLOW = 0.78
+INSIGHTFACE_COSINE_DISTANCE_REVIEW = 0.82
 
 def cosine_distance(vec_a: np.ndarray, vec_b: np.ndarray) -> float:
     norm_a = np.linalg.norm(vec_a)

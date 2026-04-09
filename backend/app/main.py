@@ -53,6 +53,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from passlib.context import CryptContext
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+print(pwd_context.hash("admin"))
+
 app.include_router(auth.router)
 app.include_router(employees.router)
 app.include_router(departments.router)

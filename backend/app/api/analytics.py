@@ -285,90 +285,126 @@ def get_camera_traffic(session: Session = Depends(get_session)):
     "/daily-attendance",
     dependencies=[Depends(require_roles(*FULL_ANALYTICS_ROLES))],
 )
-def get_daily_attendance(target_date: str | None = None, session: Session = Depends(get_session)):
-    if target_date:
-        try:
-            query_date = datetime.strptime(target_date, "%Y-%m-%d").date()
-        except ValueError:
-            query_date = date.today()
-    else:
-        latest_log = session.exec(
-            select(AccessLog)
-            .where(AccessLog.employee_id != None)
-            .order_by(AccessLog.timestamp.desc())
-        ).first()
-
-        if not latest_log:
-            return {"date": date.today().strftime("%Y-%m-%d"), "data": []}
-
-        query_date = latest_log.timestamp.date()
-
-    statement = (
-        select(AccessLog, Employee, Department, Camera)
-        .join(Employee, AccessLog.employee_id == Employee.id)
-        .join(Department, Employee.department_id == Department.id)
-        .join(Camera, AccessLog.camera_id == Camera.id)
-        .where(func.date(AccessLog.timestamp) == query_date)
+def get_daily_attendance(target_date: date, session: Session = Depends(get_session)):
+    employees = session.exec(
+        select(Employee, Department)
+        .join(Department, isouter=True)
+        .where(Employee.is_active == True)
+    ).all()
+    
+    start_of_day = datetime.combine(target_date, datetime.min.time())
+    end_of_day = datetime.combine(target_date, datetime.max.time())
+    
+    logs = session.exec(
+        select(AccessLog, Camera)
+        .join(Camera)
+        .where(AccessLog.timestamp >= start_of_day)
+        .where(AccessLog.timestamp <= end_of_day)
         .where(AccessLog.status == "granted")
-    )
-    logs = session.exec(statement).all()
+        .where(AccessLog.employee_id != None)
+        .order_by(AccessLog.timestamp)
+    ).all()
 
-    emp_data = {}
-    for log, emp, dept, cam in logs:
-        if emp.id not in emp_data:
-            emp_data[emp.id] = {
-                "name": f"{emp.last_name} {emp.first_name[0]}.",
-                "dept_name": dept.name,
-                "work_start": dept.work_start,
-                "work_end": dept.work_end,
-                "arrival": None,
-                "departure": None,
-                "any_seen": log.timestamp,
-            }
-
-        if cam.direction in ["in", "both"]:
-            if emp_data[emp.id]["arrival"] is None or log.timestamp < emp_data[emp.id]["arrival"]:
-                emp_data[emp.id]["arrival"] = log.timestamp
-
-        if cam.direction in ["out", "both"]:
-            if emp_data[emp.id]["departure"] is None or log.timestamp > emp_data[emp.id]["departure"]:
-                emp_data[emp.id]["departure"] = log.timestamp
-
-        if log.timestamp < emp_data[emp.id]["any_seen"]:
-            emp_data[emp.id]["any_seen"] = log.timestamp
+    emp_logs = {}
+    for log, cam in logs:
+        emp_logs.setdefault(log.employee_id, []).append((log, cam))
 
     result = []
-    for _, data in emp_data.items():
-        arr = data["arrival"] or data["departure"] or data["any_seen"]
-        dep = data["departure"] or data["arrival"] or data["any_seen"]
+    for emp, dept in employees:
+        e_logs = emp_logs.get(emp.id, [])
+        
+        in_logs = [l for l, c in e_logs if c.direction == "in"]
+        out_logs = [l for l, c in e_logs if c.direction == "out"]
+        
+        time_in_obj = in_logs[0].timestamp if in_logs else None
+        time_out_obj = out_logs[-1].timestamp if out_logs else None
 
-        first_time = arr.time()
-        last_time = dep.time()
+        status = "absent"
+        if time_in_obj and not time_out_obj:
+            status = "working"
+        elif time_in_obj and time_out_obj:
+            status = "left"
 
-        is_late = first_time > data["work_start"]
-        is_left_early = last_time < data["work_end"]
+        is_late = False
+        left_early = False
+        
+        if dept:
+            if time_in_obj and time_in_obj.time() > dept.work_start:
+                is_late = True
+            if time_out_obj and time_out_obj.time() < dept.work_end:
+                left_early = True
 
-        result.append(
-            {
-                "employee": data["name"],
-                "department": data["dept_name"],
-                "arrival": arr.strftime("%H:%M"),
-                "departure": dep.strftime("%H:%M"),
-                "arrival_dec": first_time.hour + first_time.minute / 60.0,
-                "departure_dec": last_time.hour + last_time.minute / 60.0,
-                "is_late": is_late,
-                "is_left_early": is_left_early,
-                "work_start": data["work_start"].strftime("%H:%M"),
-                "work_end": data["work_end"].strftime("%H:%M"),
-            }
-        )
+        result.append({
+            "id": emp.id,
+            "name": f"{emp.last_name} {emp.first_name}",
+            "department_id": emp.department_id,
+            "date": str(target_date),
+            "time_in": time_in_obj.strftime("%H:%M") if time_in_obj else None,
+            "time_out": time_out_obj.strftime("%H:%M") if time_out_obj else None,
+            "status": status,
+            "is_late": is_late,
+            "left_early": left_early
+        })
+        
+    return result
 
-    result.sort(key=lambda x: x["arrival_dec"])
 
-    return {
-        "date": query_date.strftime("%Y-%m-%d"),
-        "data": result,
-    }
+@router.get(
+    "/daily-guests",
+    dependencies=[Depends(require_roles(*FULL_ANALYTICS_ROLES))],
+)
+def get_daily_guests(target_date: date, session: Session = Depends(get_session)):
+    start_of_day = datetime.combine(target_date, datetime.min.time())
+    end_of_day = datetime.combine(target_date, datetime.max.time())
+    
+    logs = session.exec(
+        select(AccessLog, Camera, Guest, Employee)
+        .join(Camera, AccessLog.camera_id == Camera.id)
+        .join(Guest, AccessLog.guest_id == Guest.id)
+        .join(Employee, Guest.employee_id == Employee.id)
+        .where(AccessLog.timestamp >= start_of_day)
+        .where(AccessLog.timestamp <= end_of_day)
+        .where(AccessLog.status == "granted")
+        .where(AccessLog.guest_id != None)
+        .order_by(AccessLog.timestamp)
+    ).all()
+
+    guest_data = {}
+    for log, cam, guest, emp in logs:
+        if guest.id not in guest_data:
+            guest_data[guest.id] = {"guest": guest, "emp": emp, "logs": []}
+        guest_data[guest.id]["logs"].append((log, cam))
+        
+    result = []
+    for gid, data in guest_data.items():
+        guest = data["guest"]
+        emp = data["emp"]
+        g_logs = data["logs"]
+        
+        in_logs = [l for l, c in g_logs if c.direction == "in"]
+        out_logs = [l for l, c in g_logs if c.direction == "out"]
+        
+        time_in = in_logs[0].timestamp if in_logs else None
+        time_out = out_logs[-1].timestamp if out_logs else None
+        
+        duration = None
+        if time_in and time_out:
+            diff = time_out - time_in
+            hours, rem = divmod(diff.seconds, 3600)
+            minutes = rem // 60
+            duration = f"{hours} ч {minutes} мин" if hours > 0 else f"{minutes} мин"
+            
+        result.append({
+            "id": guest.id,
+            "name": f"{guest.last_name} {guest.first_name}",
+            "visited_employee": f"{emp.last_name} {emp.first_name}",
+            "date": str(target_date),
+            "time_in": time_in.strftime("%H:%M") if time_in else None,
+            "time_out": time_out.strftime("%H:%M") if time_out else None,
+            "duration": duration
+        })
+        
+    return result
 
 
 @router.get(

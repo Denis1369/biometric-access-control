@@ -78,7 +78,9 @@ async def create_guest(
     photo: UploadFile = File(...),
     session: Session = Depends(get_session),
 ):
-    if valid_until < datetime.now():
+    current_time = datetime.now(valid_until.tzinfo) if valid_until.tzinfo else datetime.now()
+    
+    if valid_until < current_time:
         raise HTTPException(
             status_code=400, 
             detail="Нельзя выдать пропуск задним числом. Укажите время в будущем."

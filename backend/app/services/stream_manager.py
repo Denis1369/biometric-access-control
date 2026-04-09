@@ -13,6 +13,7 @@ from app.models.logs import AccessLog
 from app.services.recognition_service import find_matching_employee
 from app.services.video_readers import BaseFrameReader, create_frame_reader
 
+ml_lock = threading.Lock()
 
 class CameraStreamWorker:
     def __init__(self, camera_id: int, rtsp_url: str, direction: str):
@@ -35,7 +36,7 @@ class CameraStreamWorker:
         self.cooldowns: dict[str, float] = {}
         self.backend_name: str | None = None
         self.recognition_interval = 0.8
-        self.jpeg_quality = 72
+        self.jpeg_quality = 95
 
     def start(self):
         if self.is_running:
@@ -102,6 +103,9 @@ class CameraStreamWorker:
 
     def _handle_access(self, image_bytes: bytes):
         with Session(engine) as session:
+            with ml_lock:
+                person, person_type, distance, decision = find_matching_employee(image_bytes, session)
+
             person, person_type, distance, decision = find_matching_employee(image_bytes, session)
             current_time = time.time()
 

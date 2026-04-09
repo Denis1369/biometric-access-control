@@ -17,9 +17,15 @@ export const analyticsApi = {
     return apiClient.get(`/analytics/presence${query}`) 
   },
   getCameraTraffic() { return apiClient.get('/analytics/camera-traffic') },
+  
   getDailyAttendance(date = null) { 
     const query = date ? `?target_date=${date}` : ''
     return apiClient.get(`/analytics/daily-attendance${query}`) 
   },
-  getDiscipline() { return apiClient.get('/analytics/discipline') }
+  getDiscipline() { return apiClient.get('/analytics/discipline') },
+  
+  getDailyGuests(date = null) {
+    const query = date ? `?target_date=${date}` : ''
+    return apiClient.get(`/analytics/daily-guests${query}`)
+  }
 }

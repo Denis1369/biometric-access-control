@@ -5,7 +5,7 @@ import threading
 import queue
 
 try:
-    import av 
+    import av
 except Exception:
     av = None
 
@@ -69,13 +69,11 @@ class PyAVFrameReader(BaseFrameReader):
             self._thread.start()
 
     def _reader_thread(self):
-        """Фоновый поток, который выкачивает кадры максимально быстро и хранит только последний"""
         try:
             for frame in self._iterator:
                 if self._stop_event.is_set():
                     break
                 
-                # Конвертируем в ndarray прямо здесь, снимая нагрузку с основного потока
                 array = frame.to_ndarray(format="bgr24")
                 timestamp = float(frame.time) if frame.time is not None else None
 
@@ -88,6 +86,11 @@ class PyAVFrameReader(BaseFrameReader):
                 self._q.put((array, timestamp))
         except Exception:
             pass
+        finally:
+            try:
+                self.container.close()
+            except Exception:
+                pass
 
     def read(self) -> tuple[np.ndarray, float | None] | None:
         if self._is_live:
@@ -117,11 +120,11 @@ class PyAVFrameReader(BaseFrameReader):
                     self._q.get_nowait()
                 except queue.Empty:
                     break
-                    
-        try:
-            self.container.close()
-        except Exception:
-            pass
+        else:
+            try:
+                self.container.close()
+            except Exception:
+                pass
 
     @property
     def fps(self) -> float | None:
@@ -141,8 +144,7 @@ class PyAVFrameReader(BaseFrameReader):
         except Exception:
             return None
 
-
 def create_frame_reader(source: str, is_live: bool = False) -> BaseFrameReader:
     if av is None:
-        raise RuntimeError("PyAV не установлен. Установи пакет av через pip install av")
+        raise RuntimeError("PyAV не установлен.")
     return PyAVFrameReader(source, is_live=is_live)

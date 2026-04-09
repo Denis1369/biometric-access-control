@@ -43,6 +43,11 @@
             <span class="status-text">{{ cam.is_active ? 'В сети' : 'Отключена' }}</span>
           </div>
           <div class="card-actions">
+            <label v-if="canManageCameras" class="toggle-switch" :title="cam.is_active ? 'Отключить камеру' : 'Включить камеру'">
+              <input type="checkbox" :checked="cam.is_active" @change="toggleCameraStatus(cam)" />
+              <span class="slider"></span>
+            </label>
+
             <button v-if="cam.is_active" class="btn-icon success" @click="openVideoDialog(cam)" title="Смотреть трансляцию">
               <i class="pi pi-eye"></i>
             </button>
@@ -259,6 +264,23 @@ const filteredCameras = computed(() => {
     return matchesSearch && matchesDirection && matchesStatus
   })
 })
+
+const toggleCameraStatus = async (cam) => {
+  if (!canManageCameras.value) return
+  
+  const newStatus = !cam.is_active
+  const oldStatus = cam.is_active
+  
+  cam.is_active = newStatus
+  
+  try {
+    await camerasApi.updateCamera(cam.id, { is_active: newStatus })
+  } catch (error) {
+    console.error('Ошибка при переключении статуса', error)
+    cam.is_active = oldStatus 
+    alert('Не удалось изменить статус камеры')
+  }
+}
 
 const openNewDialog = () => {
   if (!canManageCameras.value) return
@@ -489,5 +511,54 @@ onBeforeUnmount(() => {
   .form-grid { grid-template-columns: 1fr; }
   .filters-bar { flex-direction: column; }
   .search-box, .filter-select { width: 100%; }
+}
+
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 40px;
+  height: 22px;
+  align-self: center;
+  margin-right: 0.5rem;
+}
+
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background-color: #cbd5e1;
+  transition: .3s;
+  border-radius: 34px;
+}
+
+.slider:before {
+  position: absolute;
+  content: "";
+  height: 16px;
+  width: 16px;
+  left: 3px;
+  bottom: 3px;
+  background-color: white;
+  transition: .3s;
+  border-radius: 50%;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+input:checked + .slider {
+  background-color: #10b981;
+}
+
+input:focus + .slider {
+  box-shadow: 0 0 1px #10b981;
+}
+
+input:checked + .slider:before {
+  transform: translateX(18px);
 }
 </style>
