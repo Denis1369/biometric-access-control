@@ -383,11 +383,15 @@ function formatPercent(value) {
 }
 
 function formatTime(isoString) {
-  return new Date(isoString).toLocaleTimeString('ru-RU', {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit'
-  })
+  if (!isoString) return '—';
+  
+  const match = String(isoString).match(/(\d{2}:\d{2}:\d{2})/);
+  
+  if (match) {
+    return match[1];
+  }
+  
+  return isoString;
 }
 
 function getMouseNormalized(event) {
@@ -535,9 +539,12 @@ function removeCameraFromFloor(id) {
 async function toggleEditMode() {
   if (!canEditPlan.value) return
   if (!selectedFloorId.value) return
+  
   isEditMode.value = true
   activeCameraId.value = null
   camerasToRemoveFromFloor.value = []
+  draggingCameraId.value = null
+  
   await loadUnassignedCameras()
 }
 
@@ -546,7 +553,7 @@ function cancelEditMode() {
   isEditMode.value = false
   activeCameraId.value = null
   draggingCameraId.value = null
-  camerasToRemoveFromFloor.value = []
+  camerasToRemoveFromFloor.value = [] 
   loadFloorContext()
 }
 
@@ -554,11 +561,12 @@ async function savePlan() {
   if (!canEditPlan.value) return
   if (!selectedFloorId.value) return
   savingPlan.value = true
+  
   try {
     const updatePromises = mappedCameras.value.map((camera) =>
       camerasApi.updateCamera(camera.id, {
-        building_id: currentFloor.value?.building_id ?? null,
-        floor_id: currentFloor.value?.id ?? null,
+        building_id: Number(currentFloor.value?.building_id) || null,
+        floor_id: Number(currentFloor.value?.id) || null,
         plan_x: clamp01(typeof camera.plan_x === 'number' ? camera.plan_x : 0.5),
         plan_y: clamp01(typeof camera.plan_y === 'number' ? camera.plan_y : 0.5)
       })
@@ -578,9 +586,13 @@ async function savePlan() {
     isEditMode.value = false
     activeCameraId.value = null
     camerasToRemoveFromFloor.value = []
+    
     await loadFloorContext()
+    await loadUnassignedCameras() 
+    
     alert('Положение камер успешно сохранено.')
   } catch (error) {
+    console.error("Ошибка сохранения плана:", error.response?.data || error)
     alert(error.response?.data?.detail || 'Не удалось сохранить позиции камер')
   } finally {
     savingPlan.value = false

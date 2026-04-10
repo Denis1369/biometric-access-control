@@ -2,50 +2,62 @@
   <div class="monitoring-page">
     <div class="page-header">
       <div>
-        <h1 class="page-title">Мониторинг проходной</h1>
-        <p class="page-subtitle">Онлайн-наблюдение и выдача гостевых пропусков в реальном времени.</p>
+        <h1 class="page-title">Мониторинг проходных</h1>
+        <p class="page-subtitle">Мультикамерное наблюдение и управление доступом в реальном времени.</p>
       </div>
       <div class="header-controls">
-        <div class="select-wrapper">
-          <select v-model="selectedCameraId" @change="startVideoFeed" class="form-input camera-select">
-            <option value="" disabled>Выберите камеру для просмотра...</option>
-            <option v-for="cam in activeCameras" :key="cam.id" :value="cam.id">
-              {{ cam.name }}
-            </option>
-          </select>
-        </div>
-        
-        <button class="btn-primary" @click="openGuestDialog" :disabled="!selectedCameraId">
-          <i class="pi pi-id-card"></i> Выдать пропуск
+        <button class="btn-primary" @click="openGuestDialog" :disabled="selectedCameraIds.length === 0">
+          <i class="pi pi-id-card"></i> Выдать гостевой пропуск
         </button>
       </div>
     </div>
 
     <div class="monitoring-layout">
-      
       <div class="video-section">
-        <div class="video-container">
-          <img v-if="currentFrame" :src="currentFrame" alt="Live stream" class="live-video" />
-          
-          <div v-else class="video-placeholder">
-            <i class="pi" :class="isVideoLoading ? 'pi-spin pi-spinner' : 'pi-camera'"></i>
-            <p>{{ isVideoLoading ? 'Подключение к потоку...' : 'Выберите камеру для начала мониторинга' }}</p>
+        <div class="cameras-toolbar">
+          <h3 class="toolbar-title"><i class="pi pi-video"></i> Активные камеры</h3>
+          <div class="camera-checkboxes">
+            <label v-for="cam in availableCameras" :key="cam.id" class="cam-checkbox-label">
+              <input 
+                type="checkbox" 
+                :value="cam.id" 
+                v-model="selectedCameraIds" 
+                @change="toggleCameraStream(cam.id)"
+              />
+              {{ cam.name }}
+            </label>
           </div>
+        </div>
 
-          <div class="rec-indicator" v-if="currentFrame">
-             <span class="rec-dot"></span> LIVE
+        <div v-if="selectedCameraIds.length > 0" class="video-grid" :class="gridClass">
+          <div v-for="camId in selectedCameraIds" :key="camId" class="video-card">
+            <div class="video-card-header">
+              <span class="rec-dot"></span> {{ getCameraName(camId) }}
+            </div>
+            <div class="video-container">
+              <img v-if="activeStreams[camId]" :src="activeStreams[camId]" alt="Live stream" class="live-video" />
+              <div v-else class="video-placeholder">
+                <i class="pi pi-spin pi-spinner"></i>
+                <p>Подключение...</p>
+              </div>
+            </div>
           </div>
+        </div>
+
+        <div v-else class="empty-video-state">
+          <i class="pi pi-video"></i>
+          <p>Выберите одну или несколько камер на панели выше для начала мониторинга</p>
         </div>
       </div>
 
       <div class="log-section">
         <div class="log-header">
           <h3><i class="pi pi-list"></i> Журнал событий</h3>
-          <span class="log-badge" v-if="selectedCameraId">Только текущая камера</span>
+          <span class="log-badge" v-if="selectedCameraIds.length > 0">Выбранные камеры</span>
         </div>
         
-        <div class="log-list" v-if="logs.length > 0">
-          <div v-for="log in logs" :key="log.id" class="log-item" :class="log.status">
+        <div class="log-list" v-if="filteredLogs.length > 0">
+          <div v-for="log in filteredLogs" :key="log.id" class="log-item" :class="log.status">
             <div class="log-icon">
               <i class="pi" :class="log.status === 'granted' ? 'pi-check-circle' : 'pi-exclamation-triangle'"></i>
             </div>
@@ -85,11 +97,20 @@
             </div>
 
             <div class="capture-controls">
-              <button class="btn-primary full-width-btn" @click="takeSnapshot" :disabled="isTakingSnapshot">
+              <div class="capture-select-wrapper">
+                <label>Камера для снимка:</label>
+                <select v-model="snapshotCameraId" class="form-input snapshot-select">
+                  <option v-for="id in selectedCameraIds" :key="id" :value="id">
+                    {{ getCameraName(id) }}
+                  </option>
+                </select>
+              </div>
+              
+              <button class="btn-primary full-width-btn" @click="takeSnapshot" :disabled="isTakingSnapshot || !snapshotCameraId">
                 <i class="pi" :class="isTakingSnapshot ? 'pi-spin pi-spinner' : 'pi-camera'"></i> 
                 Сделать снимок (Live)
               </button>
-              <p class="capture-hint">Убедитесь, что лицо гостя видно в камере.</p>
+              <p class="capture-hint">Убедитесь, что лицо гостя четко видно.</p>
             </div>
           </div>
 
@@ -166,19 +187,20 @@ import { analyticsApi } from '../api/analytics'
 import { guestsApi } from '../api/guests'
 import { employeesApi } from '../api/employees'
 
-const cameras = ref([])
+const availableCameras = ref([])
 const employees = ref([])
-const selectedCameraId = ref('')
+const selectedCameraIds = ref([]) // Массив выбранных ID
 
-const currentFrame = ref(null)
-const isVideoLoading = ref(false)
+// Хранилище для стримов: { [cameraId]: ObjectURL }
+const activeStreams = ref({})
+// Хранилище для сокетов: { [cameraId]: WebSocket }
+const wsConnections = {}
 
 const logs = ref([])
 let logInterval = null
 
-let ws = null
-
 const displayGuestDialog = ref(false)
+const snapshotCameraId = ref('')
 const isTakingSnapshot = ref(false)
 const photoPreview = ref(null)
 const employeeDropdownOpen = ref(false)
@@ -187,7 +209,29 @@ const guestForm = ref({
   last_name: '', first_name: '', middle_name: '', employee_id: '', valid_until: '', photoFile: null
 })
 
-const activeCameras = computed(() => cameras.value.filter(c => c.is_active))
+// --- ВЫЧИСЛЯЕМЫЕ СВОЙСТВА ---
+
+// Определяем, как строить сетку: 1, 2 или 4 колонки в зависимости от количества камер
+const gridClass = computed(() => {
+  const count = selectedCameraIds.value.length
+  if (count === 1) return 'grid-1'
+  if (count === 2) return 'grid-2'
+  if (count <= 4) return 'grid-2-rows'
+  return 'grid-3-rows' // для 5+ камер
+})
+
+// Фильтруем логи только по выбранным камерам
+const filteredLogs = computed(() => {
+  if (selectedCameraIds.value.length === 0) return logs.value.slice(0, 15)
+  const selectedNames = selectedCameraIds.value.map(id => getCameraName(id))
+  return logs.value.filter(log => selectedNames.includes(log.camera_name)).slice(0, 15)
+})
+
+const getCameraName = (id) => {
+  const cam = availableCameras.value.find(c => c.id === id)
+  return cam ? cam.name : 'Неизвестная камера'
+}
+
 const getEmployeeFullName = (employee) => [employee.last_name, employee.first_name, employee.middle_name].filter(Boolean).join(' ')
 const selectedEmployeeName = computed(() => {
   const employee = employees.value.find(item => String(item.id) === String(guestForm.value.employee_id))
@@ -198,6 +242,9 @@ const filteredEmployeeOptions = computed(() => {
   if (!query) return employees.value
   return employees.value.filter(employee => getEmployeeFullName(employee).toLowerCase().includes(query))
 })
+
+
+// --- МЕТОДЫ ---
 
 const loadEmployees = async () => {
   try {
@@ -211,7 +258,7 @@ const loadEmployees = async () => {
 const loadCameras = async () => {
   try {
     const res = await camerasApi.getCameras()
-    cameras.value = res.data
+    availableCameras.value = res.data.filter(c => c.is_active)
   } catch (error) {
     console.error('Ошибка загрузки камер:', error)
   }
@@ -219,66 +266,77 @@ const loadCameras = async () => {
 
 const fetchLogs = async () => {
   try {
-    const res = await analyticsApi.getAccessLogs(30)
-    
-    if (selectedCameraId.value) {
-      const selectedCam = cameras.value.find(c => c.id === selectedCameraId.value)
-      if (selectedCam) {
-        logs.value = res.data.filter(l => l.camera_name === selectedCam.name).slice(0, 15)
-        return
-      }
-    }
-    logs.value = res.data.slice(0, 15)
+    const res = await analyticsApi.getAccessLogs(50)
+    logs.value = res.data
   } catch (error) {
     console.error('Ошибка загрузки логов:', error)
   }
 }
 
-const formatTime = (dateString) => {
-  const d = new Date(dateString + 'Z')
-  return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+const formatTime = (isoString) => {
+  if (!isoString) return '—'
+  const match = String(isoString).match(/(\d{2}:\d{2}:\d{2})/)
+  return match ? match[1] : isoString
 }
 
-const cleanupVideoSocket = () => {
-  if (ws) {
-    ws.onmessage = null
-    ws.onerror = null
-    ws.close()
-    ws = null
-  }
-  if (currentFrame.value) {
-    URL.revokeObjectURL(currentFrame.value)
-    currentFrame.value = null
+// --- ЛОГИКА МУЛЬТИ-ПОТОКА ---
+
+const toggleCameraStream = (cameraId) => {
+  if (selectedCameraIds.value.includes(cameraId)) {
+    // Включили галочку -> Открываем сокет
+    startSingleStream(cameraId)
+  } else {
+    // Убрали галочку -> Закрываем сокет
+    stopSingleStream(cameraId)
   }
 }
 
-const startVideoFeed = () => {
-  cleanupVideoSocket()
-  fetchLogs() 
+const startSingleStream = (cameraId) => {
+  if (wsConnections[cameraId]) return // Уже запущен
 
-  if (!selectedCameraId.value) return
-  
-  isVideoLoading.value = true
-  ws = new WebSocket(buildWsUrl(`/ws/video/${selectedCameraId.value}`))
-  
+  const ws = new WebSocket(buildWsUrl(`/ws/video/${cameraId}`))
   ws.binaryType = 'blob'
   
   ws.onmessage = (event) => {
-    isVideoLoading.value = false
-    if (currentFrame.value) {
-      URL.revokeObjectURL(currentFrame.value)
+    // Если кадр уже был, удаляем его из памяти браузера
+    if (activeStreams.value[cameraId]) {
+      URL.revokeObjectURL(activeStreams.value[cameraId])
     }
-    currentFrame.value = URL.createObjectURL(event.data)
+    // Создаем новую картинку
+    activeStreams.value[cameraId] = URL.createObjectURL(event.data)
   }
   
   ws.onerror = () => {
-    isVideoLoading.value = false
-    console.error('Ошибка видеопотока')
+    console.error(`Ошибка видеопотока камеры ${cameraId}`)
+  }
+
+  wsConnections[cameraId] = ws
+}
+
+const stopSingleStream = (cameraId) => {
+  if (wsConnections[cameraId]) {
+    wsConnections[cameraId].onmessage = null
+    wsConnections[cameraId].onerror = null
+    wsConnections[cameraId].close()
+    delete wsConnections[cameraId]
+  }
+  
+  if (activeStreams.value[cameraId]) {
+    URL.revokeObjectURL(activeStreams.value[cameraId])
+    delete activeStreams.value[cameraId]
   }
 }
 
+const cleanupAllStreams = () => {
+  Object.keys(wsConnections).forEach(id => stopSingleStream(id))
+}
+
+
+// --- ГОСТЕВОЙ ПРОПУСК ---
+
 const openGuestDialog = () => {
   photoPreview.value = null
+  snapshotCameraId.value = selectedCameraIds.value.length > 0 ? selectedCameraIds.value[0] : ''
   
   const today = new Date()
   today.setHours(23, 59, 0, 0)
@@ -314,10 +372,10 @@ const selectEmployee = (employee) => {
 }
 
 const takeSnapshot = async () => {
-  if (!selectedCameraId.value) return
+  if (!snapshotCameraId.value) return
   isTakingSnapshot.value = true
   try {
-    const res = await camerasApi.getSnapshot(selectedCameraId.value)
+    const res = await camerasApi.getSnapshot(snapshotCameraId.value)
     const blob = res.data
     const file = new File([blob], "snapshot.jpg", { type: "image/jpeg" })
     guestForm.value.photoFile = file
@@ -369,7 +427,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   clearInterval(logInterval)
-  cleanupVideoSocket()
+  cleanupAllStreams()
 })
 </script>
 
@@ -381,24 +439,41 @@ onBeforeUnmount(() => {
 .page-subtitle { margin: 0.35rem 0 0; color: #64748b; font-size: 0.95rem; }
 
 .header-controls { display: flex; gap: 1rem; align-items: center; }
-.select-wrapper { position: relative;}
-.select-icon { position: absolute; left: 1rem; top: 50%; transform: translateY(-50%); color: #64748b; }
-.camera-select { padding: 0.65rem 1rem 0.65rem 2.5rem; min-width: 250px; border-radius: 8px; border: 1px solid #cbd5e1; font-size: 0.95rem; background: #ffffff; outline: none; cursor: pointer; }
-.camera-select:focus { border-color: #3b82f6; }
 
-.monitoring-layout { display: grid; grid-template-columns: 2.2fr 1fr; gap: 1.5rem; flex: 1; align-items: flex-start; }
+.monitoring-layout { display: grid; grid-template-columns: 2.2fr 1fr; gap: 1.5rem; flex: 1; align-items: stretch; min-height: 0;}
 
-.video-section { background: #1e293b; border-radius: 16px; overflow: hidden; box-shadow: 0 10px 25px rgba(0,0,0,0.1); position: relative; }
-.video-container { width: 100%; aspect-ratio: 16 / 9; display: flex; align-items: center; justify-content: center; position: relative; }
-.live-video { width: 100%; height: 100%; object-fit: contain; }
-.video-placeholder { color: #64748b; display: flex; flex-direction: column; align-items: center; gap: 1rem; font-size: 1.1rem; }
-.video-placeholder i { font-size: 3rem; color: #475569; }
+/* ПАНЕЛЬ ВЫБОРА КАМЕР */
+.cameras-toolbar { background: #ffffff; border-radius: 12px; padding: 1rem 1.25rem; margin-bottom: 1.5rem; border: 1px solid #e2e8f0; display: flex; flex-direction: column; gap: 0.75rem;}
+.toolbar-title { margin: 0; font-size: 1.05rem; color: #0f172a; display: flex; align-items: center; gap: 0.5rem; }
+.camera-checkboxes { display: flex; flex-wrap: wrap; gap: 1rem; }
+.cam-checkbox-label { display: flex; align-items: center; gap: 0.4rem; cursor: pointer; font-size: 0.95rem; color: #334155; user-select: none;}
+.cam-checkbox-label input { width: 1.1rem; height: 1.1rem; cursor: pointer;}
 
-.rec-indicator { position: absolute; top: 1.5rem; left: 1.5rem; background: rgba(0,0,0,0.6); color: white; padding: 0.4rem 0.8rem; border-radius: 6px; font-size: 0.8rem; font-weight: 700; display: flex; align-items: center; gap: 0.5rem; letter-spacing: 1px; backdrop-filter: blur(4px); }
+/* СЕТКА ВИДЕО */
+.video-section { display: flex; flex-direction: column; min-height: 0;}
+.video-grid { display: grid; gap: 1rem; flex: 1; min-height: 0;}
+
+/* Адаптивные сетки в зависимости от кол-ва камер */
+.grid-1 { grid-template-columns: 1fr; }
+.grid-2 { grid-template-columns: 1fr 1fr; }
+.grid-2-rows { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+.grid-3-rows { grid-template-columns: repeat(3, 1fr); grid-auto-rows: minmax(150px, 1fr); }
+
+.video-card { background: #1e293b; border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); border: 1px solid #334155;}
+.video-card-header { padding: 0.5rem 0.75rem; background: #0f172a; color: #f8fafc; font-size: 0.85rem; font-weight: 600; display: flex; align-items: center; gap: 0.5rem; letter-spacing: 0.5px;}
 .rec-dot { width: 8px; height: 8px; background: #ef4444; border-radius: 50%; box-shadow: 0 0 8px #ef4444; animation: blink 1.5s infinite; }
 @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 
-.log-section { background: #ffffff; border-radius: 16px; border: 1px solid #e2e8f0; display: flex; flex-direction: column; height: 90%; max-height: calc(100vh - 180px); }
+.video-container { flex: 1; display: flex; align-items: center; justify-content: center; position: relative; background: #000; overflow: hidden;}
+.live-video { width: 100%; height: 100%; object-fit: contain; }
+.video-placeholder { color: #64748b; display: flex; flex-direction: column; align-items: center; gap: 0.5rem; font-size: 0.9rem; }
+.video-placeholder i { font-size: 2rem; color: #475569; }
+
+.empty-video-state { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #f8fafc; border: 2px dashed #cbd5e1; border-radius: 16px; color: #94a3b8; text-align: center; padding: 2rem;}
+.empty-video-state i { font-size: 3rem; margin-bottom: 1rem; color: #cbd5e1;}
+
+/* ЛОГИ */
+.log-section { background: #ffffff; border-radius: 16px; border: 1px solid #e2e8f0; display: flex; flex-direction: column; height: 100%; min-height: 0;}
 .log-header { padding: 1.2rem 1.5rem; border-bottom: 1px solid #f1f5f9; display: flex; justify-content: space-between; align-items: center; }
 .log-header h3 { margin: 0; font-size: 1.1rem; color: #0f172a; display: flex; align-items: center; gap: 0.5rem; }
 .log-badge { font-size: 0.7rem; background: #e0f2fe; color: #1d4ed8; padding: 0.2rem 0.5rem; border-radius: 4px; font-weight: 600; }
@@ -424,6 +499,8 @@ onBeforeUnmount(() => {
 .empty-log { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 3rem 1rem; color: #94a3b8; text-align: center; flex: 1; }
 .empty-log i { font-size: 2.5rem; margin-bottom: 1rem; color: #cbd5e1; }
 
+
+/* МОДАЛЬНОЕ ОКНО */
 .modal-overlay { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.6); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; z-index: 1000; }
 .modal-content { background: white; padding: 2rem; border-radius: 16px; width: 100%; max-height: 90vh; overflow-y: auto; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25); }
 .wide-modal { max-width: 850px; }
@@ -440,6 +517,9 @@ onBeforeUnmount(() => {
 .avatar-img { width: 130px; height: 130px; border-radius: 50%; object-fit: cover; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
 
 .capture-controls { display: flex; flex-direction: column; gap: 0.75rem; text-align: center; }
+.capture-select-wrapper { display: flex; flex-direction: column; gap: 0.4rem; text-align: left; margin-bottom: 0.5rem;}
+.capture-select-wrapper label { font-size: 0.85rem; font-weight: 600; color: #475569; }
+.snapshot-select { padding: 0.5rem; font-size: 0.85rem;}
 .capture-hint { font-size: 0.8rem; color: #64748b; margin: 0; }
 .full-width-btn { width: 100%; justify-content: center; }
 
@@ -481,5 +561,6 @@ onBeforeUnmount(() => {
   .modal-body-split { flex-direction: column; }
   .photo-column { width: 100%; box-sizing: border-box; }
   .form-grid { grid-template-columns: 1fr; }
+  .grid-2-rows, .grid-3-rows { grid-template-columns: 1fr; }
 }
 </style>

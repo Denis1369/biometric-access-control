@@ -243,37 +243,32 @@ def update_camera(
             detail="Камера не найдена",
         )
 
-    next_building_id = payload.building_id if payload.building_id is not None else camera.building_id
-    next_floor_id = payload.floor_id if payload.floor_id is not None else camera.floor_id
-    next_building_id, next_floor_id = _validate_location(session, next_building_id, next_floor_id)
+    update_data = payload.model_dump(exclude_unset=True)
 
-    if payload.name is not None:
-        camera.name = payload.name.strip()
-    if payload.ip_address is not None:
-        camera.ip_address = payload.ip_address.strip()
-    if payload.is_active is not None:
-        camera.is_active = payload.is_active
-    if payload.direction is not None:
-        camera.direction = payload.direction
+    if "building_id" in update_data or "floor_id" in update_data:
+        next_building_id = update_data.get("building_id", camera.building_id)
+        next_floor_id = update_data.get("floor_id", camera.floor_id)
+        
+        next_building_id, next_floor_id = _validate_location(session, next_building_id, next_floor_id)
+        
+        camera.building_id = next_building_id
+        camera.floor_id = next_floor_id
 
-    camera.building_id = next_building_id
-    camera.floor_id = next_floor_id
-
-    if payload.plan_x is not None:
-        if payload.plan_x < 0 or payload.plan_x > 1:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="plan_x должен быть в диапазоне от 0 до 1",
-            )
-        camera.plan_x = payload.plan_x
-
-    if payload.plan_y is not None:
-        if payload.plan_y < 0 or payload.plan_y > 1:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="plan_y должен быть в диапазоне от 0 до 1",
-            )
-        camera.plan_y = payload.plan_y
+    for key, value in update_data.items():
+        if key in ["building_id", "floor_id"]:
+            continue
+            
+        if key in ["plan_x", "plan_y"]:
+            if value is not None and (value < 0 or value > 1):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"{key} должен быть в диапазоне от 0 до 1",
+                )
+            setattr(camera, key, value)
+        elif isinstance(value, str):
+            setattr(camera, key, value.strip())
+        else:
+            setattr(camera, key, value)
 
     try:
         session.add(camera)
@@ -290,9 +285,8 @@ def update_camera(
         session.rollback()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Не удалось обновить камеру",
+            detail="Не удалось обновить камеру. Возможно, такой IP уже существует.",
         )
-
 
 
 
