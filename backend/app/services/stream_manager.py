@@ -140,6 +140,10 @@ class CameraStreamWorker:
         reconnect_delay = 1
         stale_timeout = 3.0
         frame_index = 0
+        
+        target_fps = 12
+        frame_interval = 1.0 / target_fps
+        last_encode_time = 0
 
         while self.is_running:
             try:
@@ -171,14 +175,20 @@ class CameraStreamWorker:
                         time.sleep(reconnect_delay)
                     continue
 
+                current_time = time.time()
+                if current_time - last_encode_time < frame_interval:
+                    continue 
+
                 frame, _timestamp_sec = result
                 frame_index += 1
 
-                ok, buffer = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality])
+                ok, buffer = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
                 if not ok:
                     continue
+                
                 image_bytes = buffer.tobytes()
                 self._set_latest_frame(image_bytes)
+                last_encode_time = current_time
 
                 if frame_index % 2 == 0:
                     self._set_recognition_frame(image_bytes)
