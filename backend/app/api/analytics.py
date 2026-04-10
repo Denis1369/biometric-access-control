@@ -381,29 +381,55 @@ def get_daily_guests(target_date: date, session: Session = Depends(get_session))
         emp = data["emp"]
         g_logs = data["logs"]
         
-        in_logs = [l for l, c in g_logs if c.direction == "in"]
-        out_logs = [l for l, c in g_logs if c.direction == "out"]
+        current_in_time = None
+        visit_counter = 1
         
-        time_in = in_logs[0].timestamp if in_logs else None
-        time_out = out_logs[-1].timestamp if out_logs else None
-        
-        duration = None
-        if time_in and time_out:
-            diff = time_out - time_in
-            hours, rem = divmod(diff.seconds, 3600)
-            minutes = rem // 60
-            duration = f"{hours} ч {minutes} мин" if hours > 0 else f"{minutes} мин"
+        for log, cam in g_logs:
+            if cam.direction == "in":
+                if current_in_time is None:
+                    current_in_time = log.timestamp
             
-        result.append({
-            "id": guest.id,
-            "name": f"{guest.last_name} {guest.first_name}",
-            "visited_employee": f"{emp.last_name} {emp.first_name}",
-            "date": str(target_date),
-            "time_in": time_in.strftime("%H:%M") if time_in else None,
-            "time_out": time_out.strftime("%H:%M") if time_out else None,
-            "duration": duration
-        })
+            elif cam.direction == "out":
+                if current_in_time is not None:
+                    diff = log.timestamp - current_in_time
+                    hours, rem = divmod(diff.seconds, 3600)
+                    minutes = rem // 60
+                    duration = f"{hours} ч {minutes} мин" if hours > 0 else f"{minutes} мин"
+                    
+                    result.append({
+                        "id": f"{guest.id}_{visit_counter}",
+                        "name": f"{guest.last_name} {guest.first_name}",
+                        "visited_employee": f"{emp.last_name} {emp.first_name}",
+                        "date": str(target_date),
+                        "time_in": current_in_time.strftime("%H:%M"),
+                        "time_out": log.timestamp.strftime("%H:%M"),
+                        "duration": duration
+                    })
+                    current_in_time = None
+                    visit_counter += 1
+                else:
+                    result.append({
+                        "id": f"{guest.id}_{visit_counter}",
+                        "name": f"{guest.last_name} {guest.first_name}",
+                        "visited_employee": f"{emp.last_name} {emp.first_name}",
+                        "date": str(target_date),
+                        "time_in": None,
+                        "time_out": log.timestamp.strftime("%H:%M"),
+                        "duration": None
+                    })
+                    visit_counter += 1
         
+        if current_in_time is not None:
+            result.append({
+                "id": f"{guest.id}_{visit_counter}",
+                "name": f"{guest.last_name} {guest.first_name}",
+                "visited_employee": f"{emp.last_name} {emp.first_name}",
+                "date": str(target_date),
+                "time_in": current_in_time.strftime("%H:%M"),
+                "time_out": None,
+                "duration": None
+            })
+            
     return result
 
 

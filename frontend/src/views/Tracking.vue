@@ -273,11 +273,6 @@
           </p>
         </div>
 
-        <div class="form-group checkbox-group" v-if="floorForm.id && currentFloor?.has_plan">
-          <input id="removePlan" v-model="floorForm.remove_plan" type="checkbox" />
-          <label for="removePlan">Удалить текущий план</label>
-        </div>
-
         <div class="modal-actions">
           <button class="btn-text" @click="closeFloorModal">Отмена</button>
           <button class="btn-primary" @click="saveFloor" :disabled="floorSaving">
@@ -349,7 +344,10 @@ const selectedFloorLabel = computed(() => {
 
 const currentPlanUrl = computed(() => {
   if (!selectedFloorId.value || !currentFloor.value?.has_plan) return ''
-  return `${floorsApi.getFloorPlanUrl(selectedFloorId.value)}?v=${planVersion.value}`
+  const baseUrl = floorsApi.getFloorPlanUrl(selectedFloorId.value)
+  const separator = baseUrl.includes('?') ? '&' : '?'
+  
+  return `${baseUrl}${separator}v=${planVersion.value}`
 })
 
 const activeCamera = computed(() => mappedCameras.value.find((camera) => camera.id === activeCameraId.value) || null)
@@ -752,11 +750,20 @@ async function saveFloor() {
     } else {
       response = await floorsApi.createFloor(formData)
     }
+    
     const targetBuildingId = String(floorForm.value.building_id)
+    const targetFloorId = String(response.data.id) 
+    
     await loadInitialData()
     selectedBuildingId.value = targetBuildingId
     await loadFloorsForBuilding(targetBuildingId)
-    selectedFloorId.value = String(response.data.id)
+    
+    if (selectedFloorId.value === targetFloorId) {
+      await loadFloorContext()
+    } else {
+      selectedFloorId.value = targetFloorId
+    }
+    
     closeFloorModal()
   } catch (error) {
     alert(error.response?.data?.detail || 'Не удалось сохранить этаж')
@@ -832,8 +839,31 @@ onBeforeUnmount(() => {
 .btn-text { background: transparent; color: #64748b; }
 .btn-primary:disabled, .btn-secondary:disabled, .btn-success:disabled, .btn-text:disabled { opacity: 0.6; cursor: not-allowed; }
 
-.tracking-grid { display: grid; grid-template-columns: 2.1fr 1fr; gap: 1rem; flex: 1; min-height: 0; }
-.map-section, .logs-section, .editor-sidebar { display: flex; flex-direction: column; padding: 1rem; min-height: 0; }
+.tracking-grid { 
+  
+  display: flex;
+  flex-direction: row;
+  gap: 1rem; 
+  height: fit-content; 
+  max-height: 800px;
+  align-items: stretch; 
+}
+
+.map-section {
+  flex: 2.1;
+  display: flex; 
+  flex-direction: column; 
+  padding: 1rem;  
+  min-height: 0; 
+}
+
+.logs-section, .editor-sidebar { 
+  flex: 1;
+  display: flex; 
+  flex-direction: column; 
+  padding: 1rem; 
+  min-height: 0; 
+}
 .map-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem; gap: 1rem; }
 .map-header h2, .logs-section h2, .editor-sidebar h2 { margin: 0; font-size: 1.15rem; color: #0f172a; }
 .map-header p { margin: 0.25rem 0 0; color: #64748b; font-size: 0.88rem; }
@@ -860,7 +890,16 @@ onBeforeUnmount(() => {
 .pulse-ring { position: absolute; inset: -2px; border: 2px solid #10b981; border-radius: 50%; animation: pulse 1.5s infinite; }
 @keyframes pulse { 0% { transform: scale(1); opacity: 1; } 100% { transform: scale(2.4); opacity: 0; } }
 
-.logs-list { margin-top: 1rem; overflow-y: auto; display: flex; flex-direction: column; gap: 0.75rem; }
+.logs-list { 
+  margin-top: 1rem; 
+  overflow-y: auto; 
+  display: flex; 
+  flex-direction: column; 
+  gap: 0.75rem; 
+  flex: 1; 
+  height: 0; 
+  padding-right: 0.5rem; 
+}
 .log-card { display: flex; gap: 1rem; align-items: center; padding: 0.8rem 0.9rem; border-radius: 8px; background: #f8fafc; border: 1px solid #e2e8f0; }
 .log-time { font-family: monospace; font-size: 0.82rem; color: #64748b; min-width: 70px; }
 .log-name { color: #0f172a; font-weight: 600; }

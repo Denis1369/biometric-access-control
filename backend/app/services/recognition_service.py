@@ -19,7 +19,7 @@ def cosine_distance(vec_a: np.ndarray, vec_b: np.ndarray) -> float:
 
 def _find_best_match_for_vector(vector_a: np.ndarray, session: Session):
     active_emp = set(session.exec(select(Employee.id).where(Employee.is_active == True)).all())
-    active_guests = set(session.exec(select(Guest.id).where(Guest.is_active == True, Guest.valid_until > datetime.utcnow())).all())
+    active_guests = set(session.exec(select(Guest.id).where(Guest.is_active == True, Guest.valid_until > datetime.now())).all())
 
     best_person_id = None
     best_person_type = None

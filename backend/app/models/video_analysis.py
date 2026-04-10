@@ -17,7 +17,7 @@ class VideoAnalysisJob(SQLModel, table=True):
     duration_sec: float | None = None
     granted_count: int = Field(default=0)
     denied_count: int = Field(default=0)
-    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    created_at: datetime = Field(default_factory=datetime.now, index=True)
     started_at: datetime | None = None
     finished_at: datetime | None = None
     error_message: str | None = None
@@ -38,4 +38,4 @@ class VideoAnalysisEvent(SQLModel, table=True):
     confidence: float | None = None
     distance: float | None = None
     preview_path: str | None = None
-    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    created_at: datetime = Field(default_factory=datetime.now, index=True)

@@ -158,7 +158,7 @@ def _process_job(job_id: int):
 
 
 def _run_job(job_id: int):
-    _update_job_status(job_id, "processing", started_at=datetime.utcnow(), error_message=None)
+    _update_job_status(job_id, "processing", started_at=datetime.now(), error_message=None)
 
     with Session(engine) as session:
         job = session.get(VideoAnalysisJob, job_id)
@@ -264,13 +264,13 @@ def _run_job(job_id: int):
             denied_count=denied_count,
             duration_sec=last_timestamp_sec,
             total_frames=reader.frame_count or frame_index,
-            finished_at=datetime.utcnow(),
+            finished_at=datetime.now(),
         )
     except Exception as exc:
         _update_job_status(
             job_id,
             'failed',
-            finished_at=datetime.utcnow(),
+            finished_at=datetime.now(),
             error_message=str(exc),
         )
     finally:

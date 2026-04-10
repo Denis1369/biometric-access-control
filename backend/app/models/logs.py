@@ -8,7 +8,7 @@ class AccessLog(SQLModel, table=True):
     employee_id: int | None = Field(default=None, foreign_key="employees.id")
     guest_id: int | None = Field(default=None, foreign_key="guests.id")
     camera_id: int | None = Field(default=None, foreign_key="cameras.id")
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=datetime.now)
     status: str 
     confidence: float | None = None
 
@@ -19,5 +19,5 @@ class TrackingLog(SQLModel, table=True):
     employee_id: int | None = Field(default=None, foreign_key="employees.id")
     guest_id: int | None = Field(default=None, foreign_key="guests.id")
     camera_id: int | None = Field(default=None, foreign_key="cameras.id")
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=datetime.now)
     confidence: float
