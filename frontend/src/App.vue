@@ -1,4 +1,7 @@
 <template>
+  <Toast group="app" position="top-center" />
+  <ConfirmDialog group="app-confirm" />
+
   <div v-if="!auth.state.initialized" class="boot-screen">
     <i class="pi pi-spin pi-spinner"></i>
     <span>Загрузка системы...</span>
@@ -53,6 +56,8 @@
 
 <script setup>
 import { computed } from 'vue'
+import ConfirmDialog from 'primevue/confirmdialog'
+import Toast from 'primevue/toast'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuth } from './services/auth'
 
@@ -221,5 +226,23 @@ body {
   padding: 2rem;
   flex: 1;
   overflow-y: auto;
+}
+
+.p-toast {
+  z-index: 3200 !important;
+}
+
+.p-toast .p-toast-message {
+  border-radius: 18px;
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.18);
+}
+
+.p-confirmdialog {
+  border-radius: 20px;
+  overflow: hidden;
+}
+
+.p-confirmdialog .p-dialog-content {
+  line-height: 1.5;
 }
 </style>

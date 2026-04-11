@@ -293,10 +293,12 @@ import { buildingsApi } from '../api/buildings'
 import { floorsApi } from '../api/floors'
 import { buildWsUrl } from '../api/client'
 import { useAuth } from '../services/auth'
+import { useUi } from '../services/ui'
 
 defineOptions({ name: 'TrackingPage' })
 
 const auth = useAuth()
+const ui = useUi()
 const canEditPlan = computed(() => auth.hasAnyRole('super_admin'))
 
 const logs = ref([])
@@ -455,7 +457,7 @@ function openVideoModal(camera) {
 
   ws.onerror = (error) => {
     console.error('[video] websocket error', error)
-    alert('Ошибка подключения к потоку камеры')
+    ui.error('Ошибка подключения к потоку камеры')
     closeVideoModal()
   }
 
@@ -592,10 +594,10 @@ async function savePlan() {
     await loadFloorContext()
     await loadUnassignedCameras() 
     
-    alert('Положение камер успешно сохранено.')
+    ui.success('Положение камер успешно сохранено')
   } catch (error) {
     console.error("Ошибка сохранения плана:", error.response?.data || error)
-    alert(error.response?.data?.detail || 'Не удалось сохранить позиции камер')
+    ui.error(ui.getErrorMessage(error, 'Не удалось сохранить позиции камер'))
   } finally {
     savingPlan.value = false
   }
@@ -621,8 +623,8 @@ async function loadInitialData() {
     } else if (selectedBuildingId.value) {
       await loadFloorsForBuilding(selectedBuildingId.value)
     }
-  } catch {
-    alert('Не удалось загрузить данные страницы плана здания')
+  } catch (error) {
+    ui.error(ui.getErrorMessage(error, 'Не удалось загрузить данные страницы плана здания'))
   }
 }
 
@@ -638,7 +640,7 @@ async function loadFloorsForBuilding(buildingId) {
   } catch (error) {
     floors.value = []
     selectedFloorId.value = ''
-    alert(error.response?.data?.detail || 'Не удалось загрузить этажи')
+    ui.error(ui.getErrorMessage(error, 'Не удалось загрузить этажи'))
   } finally {
     floorsLoading.value = false
   }
@@ -669,7 +671,7 @@ async function loadFloorContext() {
   } catch (error) {
     mappedCameras.value = []
     activeCameraId.value = null
-    alert(error.response?.data?.detail || 'Не удалось загрузить данные этажа')
+    ui.error(ui.getErrorMessage(error, 'Не удалось загрузить данные этажа'))
   }
 }
 
@@ -691,7 +693,7 @@ function closeBuildingModal() {
 
 async function saveBuilding() {
   if (!canEditPlan.value) return
-  if (!buildingForm.value.name.trim()) return alert('Введите название здания')
+  if (!buildingForm.value.name.trim()) return ui.warn('Введите название здания')
   buildingSaving.value = true
   try {
     const response = await buildingsApi.createBuilding({
@@ -701,8 +703,9 @@ async function saveBuilding() {
     await loadInitialData()
     selectedBuildingId.value = String(response.data.id)
     closeBuildingModal()
+    ui.success('Здание создано')
   } catch (error) {
-    alert(error.response?.data?.detail || 'Не удалось создать здание')
+    ui.error(ui.getErrorMessage(error, 'Не удалось создать здание'))
   } finally {
     buildingSaving.value = false
   }
@@ -710,7 +713,7 @@ async function saveBuilding() {
 
 function openFloorModal(editCurrent = false) {
   if (!canEditPlan.value) return
-  if (!selectedBuildingId.value) return alert('Сначала выберите или создайте здание')
+  if (!selectedBuildingId.value) return ui.warn('Сначала выберите или создайте здание')
   if (editCurrent && currentFloor.value) {
     floorForm.value = {
       id: currentFloor.value.id,
@@ -746,8 +749,9 @@ function onFloorPlanSelected(event) {
 async function saveFloor() {
   if (!canEditPlan.value) return
   if (!floorForm.value.building_id || !floorForm.value.name.trim() || floorForm.value.floor_number === '') {
-    return alert('Заполните обязательные поля этажа')
+    return ui.warn('Заполните обязательные поля этажа')
   }
+  const isEditingFloor = Boolean(floorForm.value.id)
 
   const formData = new FormData()
   formData.append('building_id', String(floorForm.value.building_id))
@@ -779,8 +783,9 @@ async function saveFloor() {
     }
     
     closeFloorModal()
+    ui.success(isEditingFloor ? 'Этаж обновлён' : 'Этаж создан')
   } catch (error) {
-    alert(error.response?.data?.detail || 'Не удалось сохранить этаж')
+    ui.error(ui.getErrorMessage(error, 'Не удалось сохранить этаж'))
   } finally {
     floorSaving.value = false
   }

@@ -200,10 +200,12 @@ import { guestsApi } from '../api/guests'
 import { camerasApi } from '../api/cameras'
 import { employeesApi } from '../api/employees'
 import { useAuth } from '../services/auth'
+import { useUi } from '../services/ui'
 
 defineOptions({ name: 'GuestsPage' })
 
 const auth = useAuth()
+const ui = useUi()
 const canManageGuests = computed(() => auth.hasAnyRole('super_admin', 'checkpoint_operator'))
 
 const guests = ref([])
@@ -351,8 +353,8 @@ const takeSnapshot = async () => {
 
     if (photoPreview.value) URL.revokeObjectURL(photoPreview.value)
     photoPreview.value = URL.createObjectURL(blob)
-  } catch {
-    alert('Не удалось сделать снимок. Камера недоступна или в кадре нет людей.')
+  } catch (error) {
+    ui.error(ui.getErrorMessage(error, 'Не удалось сделать снимок. Камера недоступна или в кадре нет людей.'))
   } finally {
     isTakingSnapshot.value = false
   }
@@ -397,11 +399,11 @@ const closeDialog = () => {
 const saveGuest = async () => {
   if (!canManageGuests.value) return
   if (!guestForm.value.last_name || !guestForm.value.first_name || !guestForm.value.valid_until || !guestForm.value.employee_id) {
-    alert('Заполните обязательные поля: фамилия, имя, к кому пришли и срок действия')
+    ui.warn('Заполните обязательные поля: фамилия, имя, к кому пришли и срок действия')
     return
   }
   if (!guestForm.value.photoFile) {
-    alert('Сделайте снимок с камеры или загрузите фотографию гостя.')
+    ui.warn('Сделайте снимок с камеры или загрузите фотографию гостя.')
     return
   }
 
@@ -418,21 +420,28 @@ const saveGuest = async () => {
     await guestsApi.createGuest(formData)
     closeDialog()
     await loadData()
+    ui.success('Гостевой пропуск выдан')
   } catch (error) {
-    const errorMsg = error.response?.data?.detail || 'Ошибка сохранения гостя'
-    alert(errorMsg)
+    ui.error(ui.getErrorMessage(error, 'Ошибка сохранения гостя'))
   }
 }
 
 const deactivateGuest = async (id) => {
   if (!canManageGuests.value) return
-  if (confirm('Аннулировать пропуск? Гость больше не сможет пройти через турникет.')) {
-    try {
-      await guestsApi.deactivateGuest(id)
-      await loadData()
-    } catch {
-      alert('Ошибка при закрытии пропуска.')
-    }
+  const accepted = await ui.confirm({
+    header: 'Аннулировать пропуск?',
+    message: 'Гость больше не сможет пройти через турникет.',
+    acceptLabel: 'Аннулировать',
+    acceptSeverity: 'danger',
+  })
+  if (!accepted) return
+
+  try {
+    await guestsApi.deactivateGuest(id)
+    await loadData()
+    ui.success('Гостевой пропуск аннулирован')
+  } catch (error) {
+    ui.error(ui.getErrorMessage(error, 'Ошибка при закрытии пропуска'))
   }
 }
 

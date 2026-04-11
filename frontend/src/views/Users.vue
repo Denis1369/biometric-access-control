@@ -110,9 +110,11 @@
 import { computed, onMounted, ref } from 'vue'
 import { usersApi } from '../api/users'
 import { employeesApi } from '../api/employees'
+import { useUi } from '../services/ui'
 
 defineOptions({ name: 'UsersPage' })
 
+const ui = useUi()
 const users = ref([])
 const employees = ref([])
 const displayDialog = ref(false)
@@ -165,7 +167,7 @@ async function loadData() {
     users.value = usersRes.data
     employees.value = employeesRes.data
   } catch (error) {
-    alert(error.response?.data?.detail || 'Не удалось загрузить пользователей')
+    ui.error(ui.getErrorMessage(error, 'Не удалось загрузить пользователей'))
   }
 }
 
@@ -206,10 +208,10 @@ function closeDialog() {
 
 async function saveUser() {
   if (!form.value.username.trim()) {
-    return alert('Введите логин')
+    return ui.warn('Введите логин')
   }
   if (!isEditMode.value && !form.value.password) {
-    return alert('Введите пароль')
+    return ui.warn('Введите пароль')
   }
 
   const payload = {
@@ -231,8 +233,9 @@ async function saveUser() {
     }
     closeDialog()
     await loadData()
+    ui.success(isEditMode.value ? 'Пользователь обновлён' : 'Пользователь создан')
   } catch (error) {
-    alert(error.response?.data?.detail || 'Не удалось сохранить пользователя')
+    ui.error(ui.getErrorMessage(error, 'Не удалось сохранить пользователя'))
   }
 }
 

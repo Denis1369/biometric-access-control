@@ -162,7 +162,9 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { videoAnalysisApi } from '../api/videoAnalysis'
+import { useUi } from '../services/ui'
 
+const ui = useUi()
 const jobs = ref([])
 const events = ref([])
 const selectedJob = ref(null)
@@ -310,7 +312,7 @@ async function rerunSelectedJob() {
     startAutoRefresh()
   } catch (error) {
     console.error('Ошибка повторного анализа видео:', error)
-    alert(error?.response?.data?.detail || 'Не удалось повторно запустить анализ')
+    ui.error(ui.getErrorMessage(error, 'Не удалось повторно запустить анализ'))
   } finally {
     rerunning.value = false
   }
@@ -329,9 +331,10 @@ async function uploadVideo() {
     selectedFile.value = null
     await loadJobs({ keepSelection: true })
     await selectJob(response.data.id)
+    ui.success('Видео загружено, анализ запущен')
   } catch (error) {
     console.error('Ошибка запуска анализа видео:', error)
-    alert(error?.response?.data?.detail || 'Не удалось запустить анализ видео')
+    ui.error(ui.getErrorMessage(error, 'Не удалось запустить анализ видео'))
   } finally {
     uploading.value = false
   }

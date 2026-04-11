@@ -166,10 +166,12 @@ import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
 import { camerasApi } from '../api/cameras'
 import { buildWsUrl } from '../api/client'
 import { useAuth } from '../services/auth'
+import { useUi } from '../services/ui'
 
 defineOptions({ name: 'CamerasPage' })
 
 const auth = useAuth()
+const ui = useUi()
 const canManageCameras = computed(() => auth.hasAnyRole('super_admin'))
 
 const cameras = ref([])
@@ -280,7 +282,7 @@ const toggleCameraStatus = async (cam) => {
   } catch (error) {
     console.error('Ошибка при переключении статуса', error)
     cam.is_active = oldStatus 
-    alert('Не удалось изменить статус камеры')
+    ui.error(ui.getErrorMessage(error, 'Не удалось изменить статус камеры'))
   }
 }
 
@@ -305,7 +307,7 @@ const closeDialog = () => {
 const saveCamera = async () => {
   if (!canManageCameras.value) return
   if (!cameraForm.value.name || !cameraForm.value.ip_address) {
-    alert('Заполните название и адрес камеры')
+    ui.warn('Заполните название и адрес камеры')
     return
   }
 
@@ -325,10 +327,10 @@ const saveCamera = async () => {
 
     closeDialog()
     await loadData()
+    ui.success(isEditMode.value ? 'Камера обновлена' : 'Камера добавлена')
   } catch (error) {
     console.error('Ошибка при сохранении камеры:', error)
-    const errorMsg = error.response?.data?.detail || error.message || 'Неизвестная ошибка сервера'
-    alert(`Реальная ошибка сервера:\n\n${JSON.stringify(errorMsg, null, 2)}`)
+    ui.error(ui.getErrorMessage(error, 'Не удалось сохранить камеру'))
   }
 }
 

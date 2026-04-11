@@ -3,6 +3,8 @@ import 'primeicons/primeicons.css'
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import PrimeVue from 'primevue/config'
+import ConfirmationService from 'primevue/confirmationservice'
+import ToastService from 'primevue/toastservice'
 import Aura from '@primevue/themes/aura'
 
 import App from './App.vue'
@@ -21,5 +23,7 @@ app.use(PrimeVue, {
         }
     }
 })
+app.use(ToastService)
+app.use(ConfirmationService)
 
 app.mount('#app')

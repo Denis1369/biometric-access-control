@@ -144,10 +144,12 @@ import Column from 'primevue/column'
 import { departmentsApi } from '../api/departments'
 import { jobPositionsApi } from '../api/jobPositions'
 import { useAuth } from '../services/auth'
+import { useUi } from '../services/ui'
 
 defineOptions({ name: 'DepartmentsPage' })
 
 const auth = useAuth()
+const ui = useUi()
 const canManageDepartments = computed(() => auth.hasAnyRole('super_admin'))
 
 const departments = ref([])
@@ -203,7 +205,7 @@ const closeDialog = () => { displayDialog.value = false }
 
 const saveDepartment = async () => {
   if (!canManageDepartments.value) return
-  if (!deptForm.value.name.trim()) return alert('Введите название отдела')
+  if (!deptForm.value.name.trim()) return ui.warn('Введите название отдела')
   try {
     const payload = { ...deptForm.value }
     if (isEditMode.value) {
@@ -213,7 +215,10 @@ const saveDepartment = async () => {
     }
     closeDialog()
     await loadData()
-  } catch { alert('Ошибка при сохранении') }
+    ui.success(isEditMode.value ? 'Отдел обновлён' : 'Отдел создан')
+  } catch (error) {
+    ui.error(ui.getErrorMessage(error, 'Ошибка при сохранении отдела'))
+  }
 }
 
 // === ЛОГИКА ДОЛЖНОСТЕЙ ===
@@ -222,7 +227,8 @@ const resetPositionForm = () => { positionForm.value = { id: null, name: '', sor
 const editPosition = (pos) => { positionForm.value = { ...pos } }
 
 const savePosition = async () => {
-  if (!positionForm.value.name.trim()) return alert('Введите название должности')
+  if (!positionForm.value.name.trim()) return ui.warn('Введите название должности')
+  const isEditingPosition = Boolean(positionForm.value.id)
   try {
     const payload = {
       name: positionForm.value.name,
@@ -236,25 +242,41 @@ const savePosition = async () => {
     }
     resetPositionForm()
     await loadData()
-  } catch { alert('Ошибка сохранения должности') }
+    ui.success(isEditingPosition ? 'Должность обновлена' : 'Должность добавлена')
+  } catch (error) {
+    ui.error(ui.getErrorMessage(error, 'Ошибка сохранения должности'))
+  }
 }
 
 const togglePositionArchive = async (pos) => {
   try {
     await jobPositionsApi.updateJobPosition(pos.id, { is_active: !pos.is_active })
     await loadData()
-  } catch { alert('Ошибка обновления') }
+    ui.success(pos.is_active ? 'Должность отправлена в архив' : 'Должность восстановлена')
+  } catch (error) {
+    ui.error(ui.getErrorMessage(error, 'Ошибка обновления должности'))
+  }
 }
 
 const openGlobalScheduleDialog = () => { if (canManageDepartments.value) displayGlobalDialog.value = true }
 const closeGlobalDialog = () => { displayGlobalDialog.value = false }
 const applyGlobalSchedule = async () => {
   if (!canManageDepartments.value) return
+  const accepted = await ui.confirm({
+    header: 'Применить график ко всем отделам?',
+    message: 'Индивидуальные графики отделов будут перезаписаны новым общим расписанием.',
+    acceptLabel: 'Применить',
+    acceptSeverity: 'danger',
+  })
+  if (!accepted) return
   try {
     await departmentsApi.applyGlobalSchedule(globalSchedule.value)
     closeGlobalDialog()
     await loadData()
-  } catch { alert('Ошибка') }
+    ui.success('Единый график применён ко всем отделам')
+  } catch (error) {
+    ui.error(ui.getErrorMessage(error, 'Не удалось применить общий график'))
+  }
 }
 
 onMounted(() => { loadData() })

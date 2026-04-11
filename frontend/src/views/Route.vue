@@ -186,9 +186,11 @@ import { buildWsUrl } from '../api/client'
 import { analyticsApi } from '../api/analytics'
 import { guestsApi } from '../api/guests'
 import { employeesApi } from '../api/employees'
+import { useUi } from '../services/ui'
 
 defineOptions({ name: 'RoutePage' })
 
+const ui = useUi()
 const availableCameras = ref([])
 const employees = ref([])
 const selectedCameraIds = ref([]) // Массив выбранных ID
@@ -384,8 +386,8 @@ const takeSnapshot = async () => {
     
     if (photoPreview.value) URL.revokeObjectURL(photoPreview.value)
     photoPreview.value = URL.createObjectURL(blob)
-  } catch {
-    alert('Не удалось сделать снимок. Возможно, камера временно недоступна.')
+  } catch (error) {
+    ui.error(ui.getErrorMessage(error, 'Не удалось сделать снимок. Возможно, камера временно недоступна.'))
   } finally {
     isTakingSnapshot.value = false
   }
@@ -393,11 +395,11 @@ const takeSnapshot = async () => {
 
 const saveGuest = async () => {
   if (!guestForm.value.last_name || !guestForm.value.first_name || !guestForm.value.valid_until || !guestForm.value.employee_id) {
-    alert('Заполните обязательные поля (Фамилия, Имя, Срок действия)')
+    ui.warn('Заполните обязательные поля: фамилия, имя, срок действия и сотрудник')
     return
   }
   if (!guestForm.value.photoFile) {
-    alert('Сделайте снимок с камеры!')
+    ui.warn('Сделайте снимок с камеры')
     return
   }
 
@@ -413,10 +415,9 @@ const saveGuest = async () => {
 
     await guestsApi.createGuest(formData)
     closeGuestDialog()
-    alert('Гостевой пропуск успешно выдан! Теперь человек может пройти через турникет.')
+    ui.success('Гостевой пропуск успешно выдан')
   } catch (error) {
-    const errorMsg = error.response?.data?.detail || 'Ошибка сохранения гостя'
-    alert(errorMsg)
+    ui.error(ui.getErrorMessage(error, 'Ошибка сохранения гостя'))
   }
 }
 

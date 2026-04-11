@@ -147,9 +147,11 @@ import { ref, onMounted, computed, watch } from 'vue'
 import { employeesApi } from '../api/employees'
 import { departmentsApi } from '../api/departments'
 import { jobPositionsApi } from '../api/jobPositions'
+import { useUi } from '../services/ui'
 
 defineOptions({ name: 'EmployeesPage' })
 
+const ui = useUi()
 const employees = ref([])
 const departments = ref([])
 const allPositions = ref([])
@@ -233,14 +235,16 @@ const openEditDialog = async emp => {
     existingPhotos.value = res.data.face_samples.map(s => ({ id: s.id, url: employeesApi.getFaceSamplePhotoUrl(s.id), is_primary: s.is_primary }))
     const primary = res.data.face_samples.find(s => s.is_primary); if (primary) setPrimary('existing', primary.id); else autoSetPrimary()
     displayDialog.value = true
-  } catch { alert('Ошибка загрузки') }
+  } catch (error) {
+    ui.error(ui.getErrorMessage(error, 'Ошибка загрузки данных сотрудника'))
+  }
 }
 
 const closeDialog = () => { displayDialog.value = false; newPhotos.value.forEach(p => URL.revokeObjectURL(p.url)); newPhotos.value = [] }
 
 const saveEmployee = async () => {
-  if (!empForm.value.last_name || !empForm.value.first_name || !empForm.value.department_id) return alert('Заполните обязательные поля')
-  if (existingPhotos.value.length === 0 && newPhotos.value.length === 0) return alert('Нужно фото')
+  if (!empForm.value.last_name || !empForm.value.first_name || !empForm.value.department_id) return ui.warn('Заполните обязательные поля')
+  if (existingPhotos.value.length === 0 && newPhotos.value.length === 0) return ui.warn('Нужно добавить хотя бы одно фото')
   try {
     const formData = new FormData()
     formData.append('last_name', empForm.value.last_name)
@@ -260,8 +264,12 @@ const saveEmployee = async () => {
       formData.append('primary_index', primaryPhoto.value.type === 'new' ? primaryPhoto.value.idOrIndex : 0)
       await employeesApi.createEmployee(formData)
     }
-    closeDialog(); await loadData()
-  } catch (error) { alert(error.response?.data?.detail || 'Ошибка') }
+    closeDialog()
+    await loadData()
+    ui.success(isEditMode.value ? 'Сотрудник обновлён' : 'Сотрудник добавлен')
+  } catch (error) {
+    ui.error(ui.getErrorMessage(error, 'Ошибка сохранения сотрудника'))
+  }
 }
 
 onMounted(() => { loadData() })
