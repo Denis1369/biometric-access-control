@@ -26,6 +26,8 @@ SNAPSHOT_ROLES = (
     UserRole.CHECKPOINT_OPERATOR,
     )
 
+ALLOWED_DIRECTIONS = {"in", "out", "both", "internal"}
+
 
 class CameraCreate(SQLModel):
     name: str = Field(min_length=1)
@@ -98,6 +100,37 @@ def _validate_location(
             building_id = floor.building_id
 
     return building_id, floor_id
+
+
+def _validate_ratio(value: float | None, field_name: str):
+    if value is None:
+        return
+    if value < 0 or value > 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{field_name} должен быть в диапазоне от 0 до 1",
+        )
+
+
+def _normalize_non_empty(value: str, field_name: str) -> str:
+    normalized = value.strip()
+    if not normalized:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Поле {field_name} не может быть пустым",
+        )
+    return normalized
+
+
+def _normalize_direction(direction: str) -> str:
+    normalized = direction.strip().lower()
+    if normalized not in ALLOWED_DIRECTIONS:
+        allowed = ", ".join(sorted(ALLOWED_DIRECTIONS))
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Некорректное направление камеры. Допустимые значения: {allowed}",
+        )
+    return normalized
 
 
 @router.get(
@@ -195,12 +228,14 @@ def get_camera(camera_id: int, session: Session = Depends(get_session)):
 )
 def create_camera(payload: CameraCreate, session: Session = Depends(get_session)):
     building_id, floor_id = _validate_location(session, payload.building_id, payload.floor_id)
+    _validate_ratio(payload.plan_x, "plan_x")
+    _validate_ratio(payload.plan_y, "plan_y")
 
     camera = Camera(
-        name=payload.name.strip(),
-        ip_address=payload.ip_address.strip(),
+        name=_normalize_non_empty(payload.name, "name"),
+        ip_address=_normalize_non_empty(payload.ip_address, "ip_address"),
         is_active=payload.is_active,
-        direction=payload.direction,
+        direction=_normalize_direction(payload.direction),
         building_id=building_id,
         floor_id=floor_id,
         plan_x=payload.plan_x,
@@ -257,14 +292,24 @@ def update_camera(
     for key, value in update_data.items():
         if key in ["building_id", "floor_id"]:
             continue
-            
+
         if key in ["plan_x", "plan_y"]:
-            if value is not None and (value < 0 or value > 1):
+            _validate_ratio(value, key)
+            setattr(camera, key, value)
+        elif key in ["name", "ip_address"]:
+            if value is None:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"{key} должен быть в диапазоне от 0 до 1",
+                    detail=f"Поле {key} не может быть null",
                 )
-            setattr(camera, key, value)
+            setattr(camera, key, _normalize_non_empty(value, key))
+        elif key == "direction":
+            if value is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Поле direction не может быть null",
+                )
+            setattr(camera, key, _normalize_direction(value))
         elif isinstance(value, str):
             setattr(camera, key, value.strip())
         else:
@@ -306,3 +351,4 @@ def get_camera_snapshot(camera_id: int):
         )
 
     return Response(content=frame_bytes, media_type="image/jpeg")
+

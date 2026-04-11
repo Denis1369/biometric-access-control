@@ -148,6 +148,8 @@ import { employeesApi } from '../api/employees'
 import { departmentsApi } from '../api/departments'
 import { jobPositionsApi } from '../api/jobPositions'
 
+defineOptions({ name: 'EmployeesPage' })
+
 const employees = ref([])
 const departments = ref([])
 const allPositions = ref([])
@@ -176,7 +178,11 @@ const loadData = async () => {
     employees.value = empRes.data
     departments.value = deptRes.data
     allPositions.value = positionRes.data
-  } catch (error) {}
+  } catch {
+    employees.value = []
+    departments.value = []
+    allPositions.value = []
+  }
 }
 
 // ДИНАМИЧЕСКИЙ СПИСОК ДОЛЖНОСТЕЙ В ЗАВИСИМОСТИ ОТ ОТДЕЛА
@@ -227,7 +233,7 @@ const openEditDialog = async emp => {
     existingPhotos.value = res.data.face_samples.map(s => ({ id: s.id, url: employeesApi.getFaceSamplePhotoUrl(s.id), is_primary: s.is_primary }))
     const primary = res.data.face_samples.find(s => s.is_primary); if (primary) setPrimary('existing', primary.id); else autoSetPrimary()
     displayDialog.value = true
-  } catch (error) { alert('Ошибка загрузки') }
+  } catch { alert('Ошибка загрузки') }
 }
 
 const closeDialog = () => { displayDialog.value = false; newPhotos.value.forEach(p => URL.revokeObjectURL(p.url)); newPhotos.value = [] }

@@ -201,6 +201,8 @@ import { camerasApi } from '../api/cameras'
 import { employeesApi } from '../api/employees'
 import { useAuth } from '../services/auth'
 
+defineOptions({ name: 'GuestsPage' })
+
 const auth = useAuth()
 const canManageGuests = computed(() => auth.hasAnyRole('super_admin', 'checkpoint_operator'))
 
@@ -229,6 +231,11 @@ const guestForm = ref({
   valid_until: '',
   photoFile: null
 })
+
+const parseLocalDate = (dateString) => {
+  const parsed = new Date(dateString)
+  return Number.isNaN(parsed.getTime()) ? null : parsed
+}
 
 const loadData = async () => {
   try {
@@ -297,11 +304,13 @@ const filteredGuests = computed(() => {
 
 const isPassValid = (dateString, isActive) => {
   if (isActive === false) return false
-  return new Date(dateString) > new Date()
+  const parsed = parseLocalDate(dateString)
+  return parsed ? parsed > new Date() : false
 }
 
 const formatDate = (dateString) => {
-  const d = new Date(dateString + 'Z')
+  const d = parseLocalDate(dateString)
+  if (!d) return 'Некорректная дата'
   return d.toLocaleString('ru-RU', {
     day: '2-digit',
     month: '2-digit',
@@ -342,7 +351,7 @@ const takeSnapshot = async () => {
 
     if (photoPreview.value) URL.revokeObjectURL(photoPreview.value)
     photoPreview.value = URL.createObjectURL(blob)
-  } catch (error) {
+  } catch {
     alert('Не удалось сделать снимок. Камера недоступна или в кадре нет людей.')
   } finally {
     isTakingSnapshot.value = false
@@ -403,8 +412,7 @@ const saveGuest = async () => {
     if (guestForm.value.middle_name) formData.append('middle_name', guestForm.value.middle_name)
     formData.append('employee_id', guestForm.value.employee_id)
 
-    const validDate = new Date(guestForm.value.valid_until)
-    formData.append('valid_until', validDate.toISOString())
+    formData.append('valid_until', guestForm.value.valid_until)
     formData.append('photo', guestForm.value.photoFile)
 
     await guestsApi.createGuest(formData)
@@ -422,7 +430,7 @@ const deactivateGuest = async (id) => {
     try {
       await guestsApi.deactivateGuest(id)
       await loadData()
-    } catch (error) {
+    } catch {
       alert('Ошибка при закрытии пропуска.')
     }
   }

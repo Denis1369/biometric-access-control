@@ -44,7 +44,7 @@ const routes = [
     path: '/video-analysis',
     name: 'video-analysis',
     component: () => import('../views/VideoAnalysis.vue'),
-    meta: { roles: ['super_admin'] },
+    meta: { roles: ['super_admin', 'checkpoint_operator'] },
   },
   {
     path: '/departments',

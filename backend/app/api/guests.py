@@ -22,6 +22,19 @@ WRITE_ROLES = (
     UserRole.CHECKPOINT_OPERATOR,
     )
 
+
+def _normalize_required_name(value: str, field_name: str) -> str:
+    normalized = value.strip()
+    if not normalized:
+        raise HTTPException(status_code=400, detail=f"Поле {field_name} не может быть пустым")
+    return normalized
+
+
+def _normalize_valid_until(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value
+    return value.astimezone().replace(tzinfo=None)
+
 class GuestRead(SQLModel):
     id: int
     last_name: str
@@ -78,7 +91,8 @@ async def create_guest(
     photo: UploadFile = File(...),
     session: Session = Depends(get_session),
 ):
-    current_time = datetime.now(valid_until.tzinfo) if valid_until.tzinfo else datetime.now()
+    valid_until = _normalize_valid_until(valid_until)
+    current_time = datetime.now()
     
     if valid_until < current_time:
         raise HTTPException(
@@ -91,8 +105,8 @@ async def create_guest(
         raise HTTPException(status_code=400, detail=f"Сотрудник с id={employee_id} не найден")
 
     guest = Guest(
-        last_name=last_name.strip(),
-        first_name=first_name.strip(),
+        last_name=_normalize_required_name(last_name, "last_name"),
+        first_name=_normalize_required_name(first_name, "first_name"),
         middle_name=middle_name.strip() if middle_name else None,
         employee_id=employee_id,
         valid_until=valid_until,

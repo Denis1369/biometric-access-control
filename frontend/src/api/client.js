@@ -1,8 +1,21 @@
 import axios from 'axios'
 import { clearStoredAuth, getStoredToken } from '../services/auth-storage'
 
+function resolveApiBaseUrl() {
+  const configured = String(import.meta.env.VITE_API_BASE_URL || '').trim()
+  if (!configured) {
+    return 'http://localhost:8000/api'
+  }
+
+  try {
+    return new URL(configured, window.location.origin).toString().replace(/\/$/, '')
+  } catch {
+    return 'http://localhost:8000/api'
+  }
+}
+
 const apiClient = axios.create({
-  baseURL: 'http://localhost:8000/api',
+  baseURL: resolveApiBaseUrl(),
   headers: {
     'Content-Type': 'application/json'
   }

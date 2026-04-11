@@ -145,6 +145,8 @@ import { departmentsApi } from '../api/departments'
 import { jobPositionsApi } from '../api/jobPositions'
 import { useAuth } from '../services/auth'
 
+defineOptions({ name: 'DepartmentsPage' })
+
 const auth = useAuth()
 const canManageDepartments = computed(() => auth.hasAnyRole('super_admin'))
 
@@ -172,7 +174,10 @@ const loadData = async () => {
     ])
     departments.value = deptRes.data
     allPositions.value = posRes.data
-  } catch (e) {}
+  } catch {
+    departments.value = []
+    allPositions.value = []
+  }
 }
 
 const openNewDialog = () => {
@@ -208,7 +213,7 @@ const saveDepartment = async () => {
     }
     closeDialog()
     await loadData()
-  } catch (error) { alert('Ошибка при сохранении') }
+  } catch { alert('Ошибка при сохранении') }
 }
 
 // === ЛОГИКА ДОЛЖНОСТЕЙ ===
@@ -231,14 +236,14 @@ const savePosition = async () => {
     }
     resetPositionForm()
     await loadData()
-  } catch (error) { alert('Ошибка сохранения должности') }
+  } catch { alert('Ошибка сохранения должности') }
 }
 
 const togglePositionArchive = async (pos) => {
   try {
     await jobPositionsApi.updateJobPosition(pos.id, { is_active: !pos.is_active })
     await loadData()
-  } catch (error) { alert('Ошибка обновления') }
+  } catch { alert('Ошибка обновления') }
 }
 
 const openGlobalScheduleDialog = () => { if (canManageDepartments.value) displayGlobalDialog.value = true }
@@ -249,7 +254,7 @@ const applyGlobalSchedule = async () => {
     await departmentsApi.applyGlobalSchedule(globalSchedule.value)
     closeGlobalDialog()
     await loadData()
-  } catch (e) { alert('Ошибка') }
+  } catch { alert('Ошибка') }
 }
 
 onMounted(() => { loadData() })

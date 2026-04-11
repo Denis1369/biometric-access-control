@@ -259,9 +259,13 @@ def get_presence(target_date: str | None = None, session: Session = Depends(get_
         .where(AccessLog.guest_id != None)
     ).one()
 
-    present = present_employees + present_guests
-    percentage = int((present / total_active * 100)) if total_active > 0 else 0
-    return {"present": present, "total": total_active, "percentage": percentage}
+    percentage = int((present_employees / total_active * 100)) if total_active > 0 else 0
+    return {
+        "present": present_employees,
+        "total": total_active,
+        "percentage": percentage,
+        "guest_count": present_guests,
+    }
 
 
 @router.get(

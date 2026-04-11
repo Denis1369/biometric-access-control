@@ -41,6 +41,8 @@ import { reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuth } from '../services/auth'
 
+defineOptions({ name: 'LoginPage' })
+
 const auth = useAuth()
 const router = useRouter()
 const route = useRoute()

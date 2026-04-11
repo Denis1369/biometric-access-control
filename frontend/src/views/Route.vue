@@ -187,6 +187,8 @@ import { analyticsApi } from '../api/analytics'
 import { guestsApi } from '../api/guests'
 import { employeesApi } from '../api/employees'
 
+defineOptions({ name: 'RoutePage' })
+
 const availableCameras = ref([])
 const employees = ref([])
 const selectedCameraIds = ref([]) // Массив выбранных ID
@@ -382,7 +384,7 @@ const takeSnapshot = async () => {
     
     if (photoPreview.value) URL.revokeObjectURL(photoPreview.value)
     photoPreview.value = URL.createObjectURL(blob)
-  } catch (error) {
+  } catch {
     alert('Не удалось сделать снимок. Возможно, камера временно недоступна.')
   } finally {
     isTakingSnapshot.value = false

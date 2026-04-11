@@ -163,21 +163,25 @@
 import { ref, onMounted, computed } from 'vue'
 import Chart from 'primevue/chart'
 import { analyticsApi } from '../api/analytics'
+import { departmentsApi } from '../api/departments'
 
-const globalDate = ref(new Date().toISOString().split('T')[0]) // Текущая дата по умолчанию
+defineOptions({ name: 'DashboardPage' })
+
+const toLocalDateInputValue = (value = new Date()) => {
+  const offsetMs = value.getTimezoneOffset() * 60000
+  return new Date(value.getTime() - offsetMs).toISOString().slice(0, 10)
+}
+
+const globalDate = ref(toLocalDateInputValue())
 
 const activeTab = ref('employees')
 const selectedReportDept = ref('all')
 const selectedStatus = ref('all')
 
-const departmentsForFilter = ref([
-  { id: 1, name: 'Администрация' },
-  { id: 2, name: 'ИТ-отдел' },
-  { id: 3, name: 'Служба безопасности' }
-])
+const departmentsForFilter = ref([])
 
 const getDeptName = (id) => {
-  const d = departmentsForFilter.value.find(d => d.id === id)
+  const d = departmentsForFilter.value.find(d => String(d.id) === String(id))
   return d ? d.name : '—'
 }
 
@@ -263,16 +267,18 @@ const onGlobalDateChange = async () => {
 
 const loadDashboardData = async () => {
   try {
-    const [dailyRes, disciplineRes, daysRes, employeesRes, guestsRes] = await Promise.all([
+    const [dailyRes, disciplineRes, daysRes, employeesRes, guestsRes, departmentsRes] = await Promise.all([
       analyticsApi.getDailyChart(globalDate.value),
       analyticsApi.getDiscipline(),
       analyticsApi.getMonthlyDaysChart(),
       analyticsApi.getDailyAttendance(globalDate.value),
-      analyticsApi.getDailyGuests(globalDate.value)
+      analyticsApi.getDailyGuests(globalDate.value),
+      departmentsApi.getDepartments()
     ])
     
     updateDailyWidgets(dailyRes, employeesRes, guestsRes)
     rawDisciplineData.value = disciplineRes.data
+    departmentsForFilter.value = departmentsRes.data
 
     monthlyDaysChartData.value = {
       labels: daysRes.data.labels,

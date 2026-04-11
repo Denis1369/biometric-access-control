@@ -111,6 +111,8 @@ import { computed, onMounted, ref } from 'vue'
 import { usersApi } from '../api/users'
 import { employeesApi } from '../api/employees'
 
+defineOptions({ name: 'UsersPage' })
+
 const users = ref([])
 const employees = ref([])
 const displayDialog = ref(false)

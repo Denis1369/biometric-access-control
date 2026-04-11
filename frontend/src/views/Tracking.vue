@@ -294,6 +294,8 @@ import { floorsApi } from '../api/floors'
 import { buildWsUrl } from '../api/client'
 import { useAuth } from '../services/auth'
 
+defineOptions({ name: 'TrackingPage' })
+
 const auth = useAuth()
 const canEditPlan = computed(() => auth.hasAnyRole('super_admin'))
 
@@ -619,7 +621,7 @@ async function loadInitialData() {
     } else if (selectedBuildingId.value) {
       await loadFloorsForBuilding(selectedBuildingId.value)
     }
-  } catch (error) {
+  } catch {
     alert('Не удалось загрузить данные страницы плана здания')
   }
 }
@@ -784,22 +786,6 @@ async function saveFloor() {
   }
 }
 
-let trackingIntervalId = null
-
-function simulateRealtimeTracking() {
-  if (trackingIntervalId) clearInterval(trackingIntervalId)
-  trackingIntervalId = window.setInterval(() => {
-    if (isEditMode.value || filteredLogs.value.length === 0) return
-    const latestLog = filteredLogs.value[0]
-    const targetCam = mappedCameras.value.find((camera) => camera.name === latestLog.camera_name)
-    if (!targetCam) return
-    activeCameraId.value = targetCam.id
-    window.setTimeout(() => {
-      if (!isEditMode.value) activeCameraId.value = null
-    }, 2000)
-  }, 5000)
-}
-
 watch(selectedBuildingId, async (newValue) => {
   isEditMode.value = false
   activeCameraId.value = null
@@ -822,12 +808,10 @@ watch(selectedFloorId, async (newValue) => {
 
 onMounted(async () => {
   await loadInitialData()
-  // simulateRealtimeTracking()
 })
 
 onBeforeUnmount(() => {
   closeVideoModal()
-  if (trackingIntervalId) clearInterval(trackingIntervalId)
 })
 </script>
 

@@ -167,6 +167,8 @@ import { camerasApi } from '../api/cameras'
 import { buildWsUrl } from '../api/client'
 import { useAuth } from '../services/auth'
 
+defineOptions({ name: 'CamerasPage' })
+
 const auth = useAuth()
 const canManageCameras = computed(() => auth.hasAnyRole('super_admin'))
 
@@ -229,7 +231,7 @@ const cleanupVideoSocket = ({ closeSocket = true } = {}) => {
     socket.onerror = null
     socket.onclose = null
     if (closeSocket && (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN)) {
-      try { socket.close(1000, 'client_closed') } catch (error) {}
+      socket.close(1000, 'client_closed')
     }
   }
   revokeLastBlob()
@@ -367,7 +369,7 @@ const openVideoDialog = (camera) => {
     currentFrame.value = lastBlobUrl
   }
 
-  socket.onerror = (event) => {
+  socket.onerror = () => {
     if (ws !== socket || currentSession !== wsSession) return
     clearConnectionTimer()
     isVideoLoading.value = false

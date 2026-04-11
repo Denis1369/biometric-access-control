@@ -40,6 +40,16 @@ class BuildingRead(SQLModel):
     created_at: datetime
 
 
+def _normalize_required_name(value: str, field_name: str) -> str:
+    normalized = value.strip()
+    if not normalized:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Поле {field_name} не может быть пустым",
+        )
+    return normalized
+
+
 @router.get(
     "/",
     response_model=List[BuildingRead],
@@ -79,7 +89,7 @@ def get_building(building_id: int, session: Session = Depends(get_session)):
 )
 def create_building(payload: BuildingCreate, session: Session = Depends(get_session)):
     building = Building(
-        name=payload.name.strip(),
+        name=_normalize_required_name(payload.name, "name"),
         address=payload.address.strip() if payload.address else None,
     )
 
@@ -116,7 +126,7 @@ def update_building(
         )
 
     if payload.name is not None:
-        building.name = payload.name.strip()
+        building.name = _normalize_required_name(payload.name, "name")
     if payload.address is not None:
         building.address = payload.address.strip() if payload.address else None
 

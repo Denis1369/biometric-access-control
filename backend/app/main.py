@@ -1,8 +1,9 @@
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from sqlmodel import SQLModel
+from sqlmodel import Session, SQLModel
 
 import app.models  # noqa: F401
 from app.api import (
@@ -20,7 +21,17 @@ from app.api import (
     websockets,
 )
 from app.core.database import engine
+from app.core.seed import ensure_demo_data
 from app.services.stream_manager import stream_manager
+
+
+def get_cors_origins() -> list[str]:
+    raw = os.getenv(
+        "CORS_ALLOW_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173",
+    )
+    origins = [origin.strip() for origin in raw.split(",") if origin.strip()]
+    return origins or ["http://localhost:5173", "http://127.0.0.1:5173"]
 
 
 def create_db_and_tables():
@@ -30,6 +41,11 @@ def create_db_and_tables():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     create_db_and_tables()
+
+    with Session(engine) as session:
+        seeded = ensure_demo_data(session)
+        if seeded:
+            print("Пустая база обнаружена, демоданные добавлены автоматически.")
 
     print("Запуск фонового анализа видеопотоков...")
     stream_manager.start_all()
@@ -47,17 +63,11 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=get_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-from passlib.context import CryptContext
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-print(pwd_context.hash("admin"))
 
 app.include_router(auth.router)
 app.include_router(employees.router)

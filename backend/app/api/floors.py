@@ -37,6 +37,16 @@ class FloorWithBuildingRead(FloorRead):
     building_name: str | None = None
 
 
+def _normalize_required_name(value: str, field_name: str) -> str:
+    normalized = value.strip()
+    if not normalized:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Поле {field_name} не может быть пустым",
+        )
+    return normalized
+
+
 @router.get(
     "/",
     response_model=List[FloorRead],
@@ -154,7 +164,7 @@ async def create_floor(
 
     floor = Floor(
         building_id=building_id,
-        name=name.strip(),
+        name=_normalize_required_name(name, "name"),
         floor_number=floor_number,
         plan_mime_type=plan.content_type if plan and plan_bytes else None,
         plan_image=plan_bytes,
@@ -204,7 +214,7 @@ async def update_floor(
         )
 
     if name is not None:
-        floor.name = name.strip()
+        floor.name = _normalize_required_name(name, "name")
     if floor_number is not None:
         floor.floor_number = floor_number
 

@@ -105,8 +105,6 @@ class CameraStreamWorker:
         with Session(engine) as session:
             with ml_lock:
                 person, person_type, distance, decision = find_matching_employee(image_bytes, session)
-
-            person, person_type, distance, decision = find_matching_employee(image_bytes, session)
             current_time = time.time()
 
             if person and decision == "auto_allow":

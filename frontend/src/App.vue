@@ -67,7 +67,7 @@ const roleLabels = {
 
 const navItems = [
   { to: '/', label: 'Дашборд', icon: 'pi pi-home', roles: ['super_admin'] },
-  { to: '/employees', label: 'Сотрудники', icon: 'pi pi-users', roles: ['super_admin', 'checkpoint_operator'] },
+  { to: '/employees', label: 'Сотрудники', icon: 'pi pi-users', roles: ['super_admin'] },
   { to: '/cameras', label: 'Камеры', icon: 'pi pi-video', roles: ['super_admin', 'checkpoint_operator'] },
   { to: '/route', label: 'Проходная', icon: 'pi pi-sign-in', roles: ['super_admin', 'checkpoint_operator'] },
   { to: '/tracking', label: 'План здания', icon: 'pi pi-building', roles: ['super_admin', 'checkpoint_operator'] },
