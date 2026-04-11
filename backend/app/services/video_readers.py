@@ -46,6 +46,8 @@ class PyAVFrameReader(BaseFrameReader):
                 "probesize": "32768",
                 "analyzeduration": "0",
                 "rw_timeout": "2000000",
+                "max_delay": "500000",
+                "stimeout": "2000000",
             }
             timeout = 2.0
 

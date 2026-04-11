@@ -1,6 +1,9 @@
 import os
-from contextlib import asynccontextmanager
+import sys
 
+os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|stimeout;2000000|timeout;2000000|max_delay;500000"
+
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session, SQLModel
@@ -24,19 +27,15 @@ from app.core.database import engine
 from app.core.seed import ensure_demo_data
 from app.services.stream_manager import stream_manager
 
-
 def get_cors_origins() -> list[str]:
     raw = os.getenv(
         "CORS_ALLOW_ORIGINS",
         "http://localhost:5173,http://127.0.0.1:5173",
     )
-    origins = [origin.strip() for origin in raw.split(",") if origin.strip()]
-    return origins or ["http://localhost:5173", "http://127.0.0.1:5173"]
-
+    return [origin.strip() for origin in raw.split(",") if origin.strip()]
 
 def create_db_and_tables():
     SQLModel.metadata.create_all(engine)
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -49,12 +48,12 @@ async def lifespan(app: FastAPI):
 
     print("Запуск фонового анализа видеопотоков...")
     stream_manager.start_all()
+    
     yield
 
     print("Остановка потоков...")
     for cam_id in list(stream_manager.workers.keys()):
         stream_manager.remove_camera(cam_id)
-
 
 app = FastAPI(
     title="Biometric Access Control API",
@@ -81,7 +80,6 @@ app.include_router(floors.router)
 app.include_router(guests.router)
 app.include_router(users.router)
 app.include_router(video_analysis.router)
-
 
 @app.get("/")
 def root():
