@@ -197,8 +197,12 @@
         </div>
 
         <div class="video-container">
-          <img v-if="currentFrame" :src="currentFrame" alt="Live stream" class="live-video" />
-          <div v-else class="video-placeholder">
+          <canvas
+            ref="videoCanvas"
+            v-show="hasVideoFrame"
+            class="live-video live-video-canvas"
+          ></canvas>
+          <div v-if="!hasVideoFrame" class="video-placeholder">
             <i class="pi pi-spin pi-spinner"></i>
             <p>Подключение к потоку...</p>
           </div>
@@ -285,7 +289,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch, onBeforeUnmount } from 'vue'
+import { computed, onMounted, ref, watch, onBeforeUnmount, nextTick } from 'vue'
 import { analyticsApi } from '../api/analytics'
 import { employeesApi } from '../api/employees'
 import { camerasApi } from '../api/cameras'
@@ -293,6 +297,7 @@ import { buildingsApi } from '../api/buildings'
 import { floorsApi } from '../api/floors'
 import { buildWsUrl } from '../api/client'
 import { useAuth } from '../services/auth'
+import { createCanvasStreamPlayer } from '../services/liveStream'
 import { useUi } from '../services/ui'
 
 defineOptions({ name: 'TrackingPage' })
@@ -332,10 +337,10 @@ const floorForm = ref({ id: null, building_id: '', name: '', floor_number: '', p
 
 const displayVideoDialog = ref(false)
 const viewingCamera = ref(null)
-const currentFrame = ref(null)
+const hasVideoFrame = ref(false)
+const videoCanvas = ref(null)
 
-let ws = null
-let currentBlobUrl = null
+let livePlayer = null
 
 const selectedBuilding = computed(() => buildings.value.find((item) => String(item.id) === String(selectedBuildingId.value)) || null)
 const currentFloor = computed(() => floors.value.find((item) => String(item.id) === String(selectedFloorId.value)) || null)
@@ -423,63 +428,45 @@ function getVideoWsUrl(cameraId) {
   return buildWsUrl(`/ws/video/${cameraId}`)
 }
 
-function cleanupFrameUrl() {
-  if (currentBlobUrl) {
-    URL.revokeObjectURL(currentBlobUrl)
-    currentBlobUrl = null
-  }
-}
-
 function openVideoModal(camera) {
   closeVideoModal()
 
   viewingCamera.value = camera
   displayVideoDialog.value = true
-  currentFrame.value = null
+  hasVideoFrame.value = false
 
-  ws = new WebSocket(getVideoWsUrl(camera.id))
-  ws.binaryType = 'blob'
+  nextTick().then(() => {
+    if (!videoCanvas.value || !displayVideoDialog.value) {
+      return
+    }
 
-  ws.onopen = () => {
-    console.log('[video] websocket connected', camera.id)
-  }
-
-  ws.onmessage = (event) => {
-    cleanupFrameUrl()
-
-    const blob = event.data instanceof Blob
-      ? event.data
-      : new Blob([event.data], { type: 'image/jpeg' })
-
-    currentBlobUrl = URL.createObjectURL(blob)
-    currentFrame.value = currentBlobUrl
-  }
-
-  ws.onerror = (error) => {
-    console.error('[video] websocket error', error)
-    ui.error('Ошибка подключения к потоку камеры')
-    closeVideoModal()
-  }
-
-  ws.onclose = (event) => {
-    console.log('[video] websocket closed', event.code, event.reason)
-  }
+    livePlayer = createCanvasStreamPlayer({
+      url: getVideoWsUrl(camera.id),
+      canvas: videoCanvas.value,
+      onFirstFrame: () => {
+        hasVideoFrame.value = true
+      },
+      onError: (error) => {
+        console.error('[video] websocket error', error)
+        ui.error('Ошибка подключения к потоку камеры')
+        closeVideoModal()
+      },
+      onClose: (event) => {
+        console.log('[video] websocket closed', event.code, event.reason)
+        livePlayer = null
+      },
+    })
+  })
 }
 
 function closeVideoModal() {
   displayVideoDialog.value = false
   viewingCamera.value = null
-  currentFrame.value = null
+  hasVideoFrame.value = false
 
-  cleanupFrameUrl()
-
-  if (ws) {
-    ws.onopen = null
-    ws.onmessage = null
-    ws.onerror = null
-    ws.onclose = null
-    ws.close()
-    ws = null
+  if (livePlayer) {
+    livePlayer.close()
+    livePlayer = null
   }
 }
 
@@ -933,6 +920,7 @@ onBeforeUnmount(() => {
 .video-modal { max-width: 1200px; padding: 1.5rem; }
 .video-container { width: 100%; aspect-ratio: 4 / 3; background-color: #0f172a; border-radius: 6px; overflow: hidden; display: flex; align-items: center; justify-content: center; }
 .live-video { width: 100%; height: 100%; object-fit: contain; }
+.live-video-canvas { display: block; }
 .video-placeholder { color: #cbd5e1; display: flex; flex-direction: column; align-items: center; gap: 1rem; }
 
 .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.25rem; }

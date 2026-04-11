@@ -92,10 +92,10 @@
     </div>
 
     <div v-if="displayDialog" class="modal-overlay" @click.self="closeDialog">
-      <div class="modal-content">
+      <form class="modal-content" @submit.prevent="saveCamera">
         <div class="modal-header">
           <h2>{{ isEditMode ? 'Редактировать точку прохода' : 'Новая точка прохода' }}</h2>
-          <button class="btn-icon close-btn" @click="closeDialog">
+          <button type="button" class="btn-icon close-btn" @click="closeDialog">
             <i class="pi pi-times"></i>
           </button>
         </div>
@@ -128,10 +128,12 @@
         </div>
 
         <div class="modal-actions">
-          <button class="btn-text" @click="closeDialog">Отмена</button>
-          <button class="btn-primary" @click="saveCamera">Сохранить</button>
+          <button type="button" class="btn-text" :disabled="savingCamera" @click="closeDialog">Отмена</button>
+          <button type="submit" class="btn-primary" :disabled="savingCamera">
+            {{ savingCamera ? 'Сохранение...' : 'Сохранить' }}
+          </button>
         </div>
-      </div>
+      </form>
     </div>
 
     <div v-if="displayVideoDialog" class="modal-overlay" @click.self="closeVideoDialog">
@@ -144,14 +146,18 @@
         </div>
 
         <div class="video-container">
-          <img v-if="currentFrame" :src="currentFrame" alt="Live stream" class="live-video" />
+          <canvas
+            ref="videoCanvas"
+            v-show="hasVideoFrame"
+            class="live-video live-video-canvas"
+          ></canvas>
 
-          <div v-else-if="videoError" class="video-placeholder video-error">
+          <div v-if="!hasVideoFrame && videoError" class="video-placeholder video-error">
             <i class="pi pi-exclamation-triangle"></i>
             <p>{{ videoError }}</p>
           </div>
 
-          <div v-else class="video-placeholder">
+          <div v-else-if="!hasVideoFrame" class="video-placeholder">
             <i class="pi pi-spin pi-spinner"></i>
             <p>{{ isVideoLoading ? 'Подключение к потоку...' : 'Ожидание видео...' }}</p>
           </div>
@@ -162,10 +168,11 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
+import { ref, onMounted, onBeforeUnmount, computed, nextTick } from 'vue'
 import { camerasApi } from '../api/cameras'
 import { buildWsUrl } from '../api/client'
 import { useAuth } from '../services/auth'
+import { createCanvasStreamPlayer } from '../services/liveStream'
 import { useUi } from '../services/ui'
 
 defineOptions({ name: 'CamerasPage' })
@@ -179,6 +186,7 @@ const displayDialog = ref(false)
 const displayVideoDialog = ref(false)
 const isEditMode = ref(false)
 const selectedCamera = ref(null)
+const savingCamera = ref(false)
 
 // === НОВЫЕ ПЕРЕМЕННЫЕ ДЛЯ ФИЛЬТРАЦИИ ===
 const searchQuery = ref('')
@@ -193,14 +201,13 @@ const cameraForm = ref({
   is_active: true
 })
 
-const currentFrame = ref(null)
+const hasVideoFrame = ref(false)
 const isVideoLoading = ref(false)
 const videoError = ref('')
+const videoCanvas = ref(null)
 
-let ws = null
-let lastBlobUrl = null
+let livePlayer = null
 let connectionTimer = null
-let wsSession = 0
 let manualVideoClose = false
 
 const clearConnectionTimer = () => {
@@ -210,33 +217,18 @@ const clearConnectionTimer = () => {
   }
 }
 
-const revokeLastBlob = () => {
-  if (lastBlobUrl) {
-    URL.revokeObjectURL(lastBlobUrl)
-    lastBlobUrl = null
-  }
-}
-
 const resetVideoState = () => {
-  currentFrame.value = null
+  hasVideoFrame.value = false
   isVideoLoading.value = false
   videoError.value = ''
 }
 
-const cleanupVideoSocket = ({ closeSocket = true } = {}) => {
+const cleanupVideoSocket = () => {
   clearConnectionTimer()
-  if (ws) {
-    const socket = ws
-    ws = null
-    socket.onopen = null
-    socket.onmessage = null
-    socket.onerror = null
-    socket.onclose = null
-    if (closeSocket && (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN)) {
-      socket.close(1000, 'client_closed')
-    }
+  if (livePlayer) {
+    livePlayer.close()
+    livePlayer = null
   }
-  revokeLastBlob()
 }
 
 const loadData = async () => {
@@ -301,41 +293,50 @@ const openEditDialog = (camera) => {
 }
 
 const closeDialog = () => {
+  if (savingCamera.value) return
   displayDialog.value = false
 }
 
 const saveCamera = async () => {
   if (!canManageCameras.value) return
-  if (!cameraForm.value.name || !cameraForm.value.ip_address) {
+  if (savingCamera.value) return
+  const name = cameraForm.value.name.trim()
+  const ipAddress = cameraForm.value.ip_address.trim()
+
+  if (!name || !ipAddress) {
     ui.warn('Заполните название и адрес камеры')
     return
   }
 
+  savingCamera.value = true
   try {
+    const wasEditMode = isEditMode.value
     const payload = {
-      name: cameraForm.value.name,
-      ip_address: cameraForm.value.ip_address,
+      name,
+      ip_address: ipAddress,
       direction: cameraForm.value.direction,
       is_active: cameraForm.value.is_active
     }
 
-    if (isEditMode.value) {
+    if (wasEditMode) {
       await camerasApi.updateCamera(cameraForm.value.id, payload)
     } else {
       await camerasApi.createCamera(payload)
     }
 
-    closeDialog()
+    displayDialog.value = false
     await loadData()
-    ui.success(isEditMode.value ? 'Камера обновлена' : 'Камера добавлена')
+    ui.success(wasEditMode ? 'Камера обновлена' : 'Камера добавлена')
   } catch (error) {
     console.error('Ошибка при сохранении камеры:', error)
     ui.error(ui.getErrorMessage(error, 'Не удалось сохранить камеру'))
+  } finally {
+    savingCamera.value = false
   }
 }
 
 
-const openVideoDialog = (camera) => {
+const openVideoDialog = async (camera) => {
   manualVideoClose = false
   cleanupVideoSocket()
   resetVideoState()
@@ -344,51 +345,43 @@ const openVideoDialog = (camera) => {
   displayVideoDialog.value = true
   isVideoLoading.value = true
 
-  const currentSession = ++wsSession
-  const socket = new WebSocket(buildWsUrl(`/ws/video/${camera.id}`))
-
-  ws = socket
-  socket.binaryType = 'blob'
+  await nextTick()
+  if (!videoCanvas.value) {
+    isVideoLoading.value = false
+    videoError.value = 'Не удалось подготовить область видео'
+    return
+  }
 
   connectionTimer = setTimeout(() => {
-    if (ws !== socket || currentSession !== wsSession) return
     videoError.value = 'Не удалось подключиться к потоку'
     isVideoLoading.value = false
     cleanupVideoSocket()
   }, 5000)
 
-  socket.onopen = () => {
-    if (ws !== socket || currentSession !== wsSession) return
-  }
-
-  socket.onmessage = (event) => {
-    if (ws !== socket || currentSession !== wsSession) return
-    clearConnectionTimer()
-    isVideoLoading.value = false
-    videoError.value = ''
-    revokeLastBlob()
-    lastBlobUrl = URL.createObjectURL(event.data)
-    currentFrame.value = lastBlobUrl
-  }
-
-  socket.onerror = () => {
-    if (ws !== socket || currentSession !== wsSession) return
-    clearConnectionTimer()
-    isVideoLoading.value = false
-    videoError.value = 'Ошибка подключения к потоку'
-  }
-
-  socket.onclose = (event) => {
-    if (ws !== socket || currentSession !== wsSession) return
-    ws = null
-    clearConnectionTimer()
-    revokeLastBlob()
-    currentFrame.value = null
-    isVideoLoading.value = false
-    if (displayVideoDialog.value && !manualVideoClose) {
-      videoError.value = event.reason ? `Поток закрыт: ${event.reason}` : `Поток закрыт (код ${event.code})`
-    }
-  }
+  livePlayer = createCanvasStreamPlayer({
+    url: buildWsUrl(`/ws/video/${camera.id}`),
+    canvas: videoCanvas.value,
+    onFirstFrame: () => {
+      clearConnectionTimer()
+      hasVideoFrame.value = true
+      isVideoLoading.value = false
+      videoError.value = ''
+    },
+    onError: () => {
+      clearConnectionTimer()
+      isVideoLoading.value = false
+      videoError.value = 'Ошибка подключения к потоку'
+    },
+    onClose: (event) => {
+      clearConnectionTimer()
+      hasVideoFrame.value = false
+      isVideoLoading.value = false
+      livePlayer = null
+      if (displayVideoDialog.value && !manualVideoClose) {
+        videoError.value = event.reason ? `Поток закрыт: ${event.reason}` : `Поток закрыт (код ${event.code})`
+      }
+    },
+  })
 }
 
 const closeVideoDialog = () => {
@@ -508,6 +501,7 @@ onBeforeUnmount(() => {
 .video-header h2 { margin: 0; font-size: 1.2rem; color: #0f172a; }
 .video-container { width: 100%; aspect-ratio: 16 / 9; background-color: #0f172a; border-radius: 12px; overflow: hidden; display: flex; align-items: center; justify-content: center; }
 .live-video { width: 100%; height: 100%; object-fit: contain; }
+.live-video-canvas { display: block; }
 .video-placeholder { color: #cbd5e1; display: flex; flex-direction: column; align-items: center; gap: 1rem; }
 .video-error { color: #fca5a5; }
 

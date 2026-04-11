@@ -48,15 +48,22 @@ async def video_endpoint(websocket: WebSocket, camera_id: int):
 
     await websocket.accept()
     try:
+        last_frame_version = 0
         while True:
-            frame_bytes = stream_manager.get_latest_frame(camera_id, max_age_sec=3.0)
+            payload = stream_manager.get_latest_frame_payload(camera_id, max_age_sec=2.0)
 
-            if frame_bytes is None:
-                await asyncio.sleep(0.1)
+            if payload is None:
+                await asyncio.sleep(0.03)
                 continue
 
+            frame_bytes, frame_version = payload
+            if frame_version == last_frame_version:
+                await asyncio.sleep(0.01)
+                continue
+
+            last_frame_version = frame_version
             await websocket.send_bytes(frame_bytes)
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0)
 
     except WebSocketDisconnect:
         pass

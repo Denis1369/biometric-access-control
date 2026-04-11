@@ -1,7 +1,4 @@
 import os
-import sys
-
-os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|stimeout;2000000|timeout;2000000|max_delay;500000"
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI

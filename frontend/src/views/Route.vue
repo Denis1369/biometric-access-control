@@ -35,8 +35,12 @@
               <span class="rec-dot"></span> {{ getCameraName(camId) }}
             </div>
             <div class="video-container">
-              <img v-if="activeStreams[camId]" :src="activeStreams[camId]" alt="Live stream" class="live-video" />
-              <div v-else class="video-placeholder">
+              <canvas
+                :ref="(element) => registerStreamCanvas(camId, element)"
+                v-show="hasStreamFrame(camId)"
+                class="live-video live-video-canvas"
+              ></canvas>
+              <div v-if="!hasStreamFrame(camId)" class="video-placeholder">
                 <i class="pi pi-spin pi-spinner"></i>
                 <p>Подключение...</p>
               </div>
@@ -180,12 +184,13 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
+import { ref, onMounted, onBeforeUnmount, computed, nextTick } from 'vue'
 import { camerasApi } from '../api/cameras'
 import { buildWsUrl } from '../api/client'
 import { analyticsApi } from '../api/analytics'
 import { guestsApi } from '../api/guests'
 import { employeesApi } from '../api/employees'
+import { createCanvasStreamPlayer } from '../services/liveStream'
 import { useUi } from '../services/ui'
 
 defineOptions({ name: 'RoutePage' })
@@ -195,10 +200,9 @@ const availableCameras = ref([])
 const employees = ref([])
 const selectedCameraIds = ref([]) // Массив выбранных ID
 
-// Хранилище для стримов: { [cameraId]: ObjectURL }
-const activeStreams = ref({})
-// Хранилище для сокетов: { [cameraId]: WebSocket }
-const wsConnections = {}
+const streamStates = ref({})
+const streamPlayers = {}
+const streamCanvases = {}
 
 const logs = ref([])
 let logInterval = null
@@ -285,54 +289,82 @@ const formatTime = (isoString) => {
 
 // --- ЛОГИКА МУЛЬТИ-ПОТОКА ---
 
-const toggleCameraStream = (cameraId) => {
+const updateStreamState = (cameraId, patch) => {
+  streamStates.value = {
+    ...streamStates.value,
+    [cameraId]: {
+      hasFrame: false,
+      error: '',
+      ...(streamStates.value[cameraId] || {}),
+      ...patch,
+    },
+  }
+}
+
+const removeStreamState = (cameraId) => {
+  const nextState = { ...streamStates.value }
+  delete nextState[cameraId]
+  streamStates.value = nextState
+}
+
+const registerStreamCanvas = (cameraId, element) => {
+  if (element) {
+    streamCanvases[cameraId] = element
+    return
+  }
+  delete streamCanvases[cameraId]
+}
+
+const hasStreamFrame = (cameraId) => Boolean(streamStates.value[cameraId]?.hasFrame)
+
+const toggleCameraStream = async (cameraId) => {
   if (selectedCameraIds.value.includes(cameraId)) {
-    // Включили галочку -> Открываем сокет
-    startSingleStream(cameraId)
+    await startSingleStream(cameraId)
   } else {
-    // Убрали галочку -> Закрываем сокет
     stopSingleStream(cameraId)
   }
 }
 
-const startSingleStream = (cameraId) => {
-  if (wsConnections[cameraId]) return // Уже запущен
+const startSingleStream = async (cameraId) => {
+  if (streamPlayers[cameraId]) return
 
-  const ws = new WebSocket(buildWsUrl(`/ws/video/${cameraId}`))
-  ws.binaryType = 'blob'
-  
-  ws.onmessage = (event) => {
-    // Если кадр уже был, удаляем его из памяти браузера
-    if (activeStreams.value[cameraId]) {
-      URL.revokeObjectURL(activeStreams.value[cameraId])
-    }
-    // Создаем новую картинку
-    activeStreams.value[cameraId] = URL.createObjectURL(event.data)
-  }
-  
-  ws.onerror = () => {
-    console.error(`Ошибка видеопотока камеры ${cameraId}`)
+  updateStreamState(cameraId, { hasFrame: false, error: '' })
+  await nextTick()
+
+  const canvas = streamCanvases[cameraId]
+  if (!canvas) {
+    updateStreamState(cameraId, { error: 'Плеер не готов' })
+    return
   }
 
-  wsConnections[cameraId] = ws
+  streamPlayers[cameraId] = createCanvasStreamPlayer({
+    url: buildWsUrl(`/ws/video/${cameraId}`),
+    canvas,
+    onFirstFrame: () => {
+      updateStreamState(cameraId, { hasFrame: true, error: '' })
+    },
+    onError: () => {
+      console.error(`Ошибка видеопотока камеры ${cameraId}`)
+      updateStreamState(cameraId, { hasFrame: false, error: 'Ошибка потока' })
+    },
+    onClose: () => {
+      delete streamPlayers[cameraId]
+      updateStreamState(cameraId, { hasFrame: false })
+    },
+  })
 }
 
 const stopSingleStream = (cameraId) => {
-  if (wsConnections[cameraId]) {
-    wsConnections[cameraId].onmessage = null
-    wsConnections[cameraId].onerror = null
-    wsConnections[cameraId].close()
-    delete wsConnections[cameraId]
+  if (streamPlayers[cameraId]) {
+    streamPlayers[cameraId].close()
+    delete streamPlayers[cameraId]
   }
-  
-  if (activeStreams.value[cameraId]) {
-    URL.revokeObjectURL(activeStreams.value[cameraId])
-    delete activeStreams.value[cameraId]
-  }
+
+  removeStreamState(cameraId)
 }
 
 const cleanupAllStreams = () => {
-  Object.keys(wsConnections).forEach(id => stopSingleStream(id))
+  Object.keys(streamPlayers).forEach((id) => stopSingleStream(Number(id)))
 }
 
 
@@ -469,6 +501,7 @@ onBeforeUnmount(() => {
 
 .video-container { flex: 1; display: flex; align-items: center; justify-content: center; position: relative; background: #000; overflow: hidden;}
 .live-video { width: 100%; height: 100%; object-fit: contain; }
+.live-video-canvas { display: block; }
 .video-placeholder { color: #64748b; display: flex; flex-direction: column; align-items: center; gap: 0.5rem; font-size: 0.9rem; }
 .video-placeholder i { font-size: 2rem; color: #475569; }
 

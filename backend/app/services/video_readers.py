@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import numpy as np
-import threading
 import queue
+import threading
+
+import numpy as np
 
 try:
     import av
@@ -33,34 +34,18 @@ class PyAVFrameReader(BaseFrameReader):
 
     def __init__(self, source: str, is_live: bool = False):
         if av is None:
-            raise RuntimeError("PyAV не установлен")
+            raise RuntimeError("PyAV is not installed")
 
-        options: dict[str, str] = {}
-        timeout: float | tuple[float, float] | None = None
-
-        if is_live and source.startswith("rtsp://"):
-            options = {
-                "rtsp_transport": "tcp",
-                "fflags": "nobuffer",
-                "flags": "low_delay",
-                "probesize": "32768",
-                "analyzeduration": "0",
-                "rw_timeout": "2000000",
-                "max_delay": "500000",
-                "stimeout": "2000000",
-            }
-            timeout = 2.0
-
-        self.container = av.open(source, mode="r", options=options or None, timeout=timeout)
+        self.container = self._open_container(source, is_live)
         if not self.container.streams.video:
-            raise RuntimeError("Во входном источнике нет видеопотока")
+            raise RuntimeError("Video stream not found in source")
 
         self.video_stream = self.container.streams.video[0]
         try:
-            self.video_stream.thread_type = "SLICE"
+            self.video_stream.thread_type = "AUTO"
         except Exception:
             pass
-            
+
         self._iterator = self.container.decode(video=0)
         self._is_live = is_live
 
@@ -70,12 +55,48 @@ class PyAVFrameReader(BaseFrameReader):
             self._thread = threading.Thread(target=self._reader_thread, daemon=True)
             self._thread.start()
 
+    def _open_container(self, source: str, is_live: bool):
+        attempts: list[tuple[dict[str, str] | None, float | tuple[float, float] | None]] = [(None, None)]
+
+        if is_live:
+            common_options = {
+                "fflags": "discardcorrupt",
+                "probesize": "131072",
+                "analyzeduration": "1000000",
+                "rw_timeout": "5000000",
+                "stimeout": "5000000",
+                "max_delay": "300000",
+            }
+            timeout: float | tuple[float, float] | None = 2.0
+
+            if source.startswith("rtsp://"):
+                attempts = [
+                    ({**common_options, "rtsp_transport": "tcp"}, timeout),
+                    ({"rtsp_transport": "tcp"}, timeout),
+                    (None, timeout),
+                ]
+            else:
+                attempts = [(common_options, timeout), (None, timeout)]
+
+        last_error: Exception | None = None
+        for options, timeout in attempts:
+            try:
+                return av.open(source, mode="r", options=options, timeout=timeout)
+            except Exception as exc:
+                last_error = exc
+
+        if last_error is not None:
+            raise RuntimeError(str(last_error)) from last_error
+        raise RuntimeError("Unable to open video source")
+
     def _reader_thread(self):
         try:
             for frame in self._iterator:
                 if self._stop_event.is_set():
                     break
-                
+                if getattr(frame, "is_corrupt", False):
+                    continue
+
                 array = frame.to_ndarray(format="bgr24")
                 timestamp = float(frame.time) if frame.time is not None else None
 
@@ -84,7 +105,7 @@ class PyAVFrameReader(BaseFrameReader):
                         self._q.get_nowait()
                     except queue.Empty:
                         pass
-                        
+
                 self._q.put((array, timestamp))
         except Exception:
             pass
@@ -100,7 +121,8 @@ class PyAVFrameReader(BaseFrameReader):
                 return self._q.get(timeout=5.0)
             except queue.Empty:
                 return None
-        else:
+
+        while True:
             try:
                 frame = next(self._iterator)
             except StopIteration:
@@ -109,6 +131,9 @@ class PyAVFrameReader(BaseFrameReader):
                 return None
             except Exception as exc:
                 raise RuntimeError(str(exc)) from exc
+
+            if getattr(frame, "is_corrupt", False):
+                continue
 
             array = frame.to_ndarray(format="bgr24")
             timestamp = float(frame.time) if frame.time is not None else None
@@ -122,11 +147,16 @@ class PyAVFrameReader(BaseFrameReader):
                     self._q.get_nowait()
                 except queue.Empty:
                     break
-        else:
             try:
                 self.container.close()
             except Exception:
                 pass
+            return
+
+        try:
+            self.container.close()
+        except Exception:
+            pass
 
     @property
     def fps(self) -> float | None:
@@ -146,7 +176,8 @@ class PyAVFrameReader(BaseFrameReader):
         except Exception:
             return None
 
+
 def create_frame_reader(source: str, is_live: bool = False) -> BaseFrameReader:
     if av is None:
-        raise RuntimeError("PyAV не установлен.")
+        raise RuntimeError("PyAV is not installed.")
     return PyAVFrameReader(source, is_live=is_live)

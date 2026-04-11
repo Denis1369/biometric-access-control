@@ -1,8 +1,10 @@
 from __future__ import annotations
+
 import threading
 import time
-from typing import Optional
-import cv2
+from io import BytesIO
+
+from PIL import Image
 from sqlmodel import Session, select
 
 from app.core.database import engine
@@ -12,6 +14,39 @@ from app.services.recognition_service import find_matching_employee
 from app.services.video_readers import BaseFrameReader, create_frame_reader
 
 ml_lock = threading.Lock()
+try:
+    RESAMPLE_LANCZOS = Image.Resampling.LANCZOS
+except AttributeError:
+    RESAMPLE_LANCZOS = Image.LANCZOS
+
+
+def _encode_frame_to_jpeg(
+    frame,
+    quality: int = 72,
+    max_width: int | None = None,
+    max_height: int | None = None,
+) -> bytes | None:
+    try:
+        image = Image.fromarray(frame[:, :, ::-1].copy(), mode="RGB")
+        if max_width or max_height:
+            limit = (
+                max_width if max_width is not None else image.width,
+                max_height if max_height is not None else image.height,
+            )
+            image.thumbnail(limit, RESAMPLE_LANCZOS)
+        buffer = BytesIO()
+        image.save(
+            buffer,
+            format="JPEG",
+            quality=quality,
+            subsampling=1,
+            optimize=False,
+            progressive=False,
+        )
+        return buffer.getvalue()
+    except Exception:
+        return None
+
 
 class CameraStreamWorker:
     def __init__(self, camera_id: int, rtsp_url: str, direction: str):
@@ -19,21 +54,26 @@ class CameraStreamWorker:
         self.rtsp_url = rtsp_url
         self.direction = direction
         self.is_running = False
-        
+
         self.capture_thread = None
         self.recognition_thread = None
-        
+
         self.reader: BaseFrameReader | None = None
         self.reader_lock = threading.Lock()
-        
-        self.latest_frame = None
-        self.latest_frame_for_recognition = None
+
+        self.latest_frame: bytes | None = None
+        self.latest_frame_for_recognition: bytes | None = None
+        self.latest_frame_version = 0
         self.frame_lock = threading.Lock()
         self.recognition_frame_lock = threading.Lock()
-        
+
         self.last_frame_at = 0.0
-        self.cooldowns = {}
-        self.recognition_interval = 0.2 # 5 FPS для распознавания
+        self.cooldowns: dict[str, float] = {}
+        self.recognition_interval = 0.75
+        self.stream_target_fps = 10
+        self.jpeg_quality = 82
+        self.preview_max_width = 1280
+        self.preview_max_height = 720
 
     def start(self):
         self.is_running = True
@@ -62,7 +102,6 @@ class CameraStreamWorker:
     def _open_reader(self) -> BaseFrameReader | None:
         self._release_reader()
         try:
-            # Твой PyAV ридер! Он сам применит 2-секундный таймаут, если ты добавил options в video_readers.py
             reader = create_frame_reader(self.rtsp_url, is_live=True)
             with self.reader_lock:
                 self.reader = reader
@@ -75,23 +114,29 @@ class CameraStreamWorker:
         with self.frame_lock:
             self.latest_frame = frame_bytes
             self.last_frame_at = time.time() if frame_bytes else 0.0
+            if frame_bytes:
+                self.latest_frame_version += 1
 
     def _set_recognition_frame(self, frame_bytes: bytes | None):
         with self.recognition_frame_lock:
             self.latest_frame_for_recognition = frame_bytes
 
     def get_latest_frame(self, max_age_sec: float = 3.0) -> bytes | None:
+        payload = self.get_latest_frame_payload(max_age_sec=max_age_sec)
+        if payload is None:
+            return None
+        return payload[0]
+
+    def get_latest_frame_payload(self, max_age_sec: float = 3.0) -> tuple[bytes, int] | None:
         with self.frame_lock:
             if not self.latest_frame or (time.time() - self.last_frame_at > max_age_sec):
                 return None
-            return self.latest_frame
+            return self.latest_frame, self.latest_frame_version
 
     def _capture_loop(self):
         reconnect_delay = 2.0
-        target_fps = 15
-        frame_interval = 1.0 / target_fps
-        last_encode_time = 0
-        frame_index = 0
+        frame_interval = 1.0 / self.stream_target_fps
+        last_encode_time = 0.0
 
         while self.is_running:
             try:
@@ -103,11 +148,9 @@ class CameraStreamWorker:
                     if reader is None:
                         time.sleep(reconnect_delay)
                         continue
-                    print(f"[Камера {self.camera_id}] Поток подключен (PyAV)!")
+                    print(f"[Камера {self.camera_id}] Поток подключен (PyAV)")
 
-                # Если таймаут сработает, read() вернет None
                 result = reader.read()
-
                 if result is None:
                     print(f"[Камера {self.camera_id}] Поток недоступен, переподключение...")
                     self._set_latest_frame(None)
@@ -117,48 +160,46 @@ class CameraStreamWorker:
 
                 current_time = time.time()
                 if current_time - last_encode_time < frame_interval:
-                    continue 
+                    continue
 
                 frame, _ = result
-                frame_index += 1
+                image_bytes = _encode_frame_to_jpeg(
+                    frame,
+                    quality=self.jpeg_quality,
+                    max_width=self.preview_max_width,
+                    max_height=self.preview_max_height,
+                )
+                if image_bytes is None:
+                    continue
 
-                # Конвертируем сырой кадр в JPG для передачи на фронтенд
-                ok, buffer = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
-                if ok:
-                    image_bytes = buffer.tobytes()
-                    self._set_latest_frame(image_bytes)
-                    last_encode_time = current_time
-
-                    # Отдаем каждый 3-й кадр в соседний поток для распознавания лица
-                    if frame_index % 3 == 0:
-                        self._set_recognition_frame(image_bytes)
-
-            except Exception as e:
-                print(f"[Камера {self.camera_id}] Ошибка захвата: {e}")
+                self._set_latest_frame(image_bytes)
+                self._set_recognition_frame(image_bytes)
+                last_encode_time = current_time
+            except Exception as exc:
+                print(f"[Камера {self.camera_id}] Ошибка захвата: {exc}")
                 self._release_reader()
                 time.sleep(reconnect_delay)
 
     def _recognition_loop(self):
         while self.is_running:
             try:
-                frame_bytes = None
                 with self.recognition_frame_lock:
                     frame_bytes = self.latest_frame_for_recognition
-                    self.latest_frame_for_recognition = None # Забрали кадр
+                    self.latest_frame_for_recognition = None
 
                 if frame_bytes:
                     self._handle_access(frame_bytes)
-                
+
                 time.sleep(self.recognition_interval)
-            except Exception as e:
-                print(f"[Камера {self.camera_id}] Ошибка распознавания: {e}")
+            except Exception as exc:
+                print(f"[Камера {self.camera_id}] Ошибка распознавания: {exc}")
                 time.sleep(0.5)
 
     def _handle_access(self, image_bytes: bytes):
         with Session(engine) as session:
             with ml_lock:
                 person, person_type, distance, decision = find_matching_employee(image_bytes, session)
-            
+
             current_time = time.time()
 
             if person and decision == "auto_allow":
@@ -175,7 +216,7 @@ class CameraStreamWorker:
                     session.commit()
                     badge = "[ГОСТЬ]" if person_type == "guest" else "[СОТРУДНИК]"
                     print(f"[Камера {self.camera_id}] Проход: {badge} {person.last_name} {person.first_name}")
-            
+
             elif person is None and distance is not None:
                 last_seen = self.cooldowns.get("unknown", 0)
                 if current_time - last_seen > 10:
@@ -184,6 +225,7 @@ class CameraStreamWorker:
                     session.add(log)
                     session.commit()
                     print(f"[Камера {self.camera_id}] Тревога: Неизвестное лицо!")
+
 
 class StreamManager:
     def __init__(self):
@@ -217,5 +259,13 @@ class StreamManager:
         if worker:
             return worker.get_latest_frame(max_age_sec=max_age_sec)
         return None
+
+    def get_latest_frame_payload(self, camera_id: int, max_age_sec: float = 3.0):
+        with self.lock:
+            worker = self.workers.get(camera_id)
+        if worker:
+            return worker.get_latest_frame_payload(max_age_sec=max_age_sec)
+        return None
+
 
 stream_manager = StreamManager()
