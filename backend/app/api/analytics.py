@@ -2,7 +2,7 @@ from calendar import monthrange
 from datetime import date, datetime
 from typing import List
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlmodel import Session, func, select
 
@@ -49,6 +49,31 @@ class DashboardStatsResponse(BaseModel):
     accesses_today: int
 
 
+def _parse_target_date(target_date: str | None) -> date:
+    if not target_date:
+        return date.today()
+
+    try:
+        return datetime.strptime(target_date, "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Параметр target_date должен быть в формате YYYY-MM-DD",
+        ) from exc
+
+
+def _build_person_name(employee: Employee | None, guest: Guest | None) -> str:
+    if employee:
+        return " ".join(
+            part
+            for part in (employee.last_name, employee.first_name, employee.middle_name)
+            if part
+        )
+    if guest:
+        return f"[Гость] {guest.last_name} {guest.first_name}"
+    return "Неизвестное лицо"
+
+
 @router.get(
     "/access-logs",
     response_model=List[AccessLogResponse],
@@ -69,21 +94,12 @@ def get_access_logs(session: Session = Depends(get_session), skip: int = 0, limi
 
     response_data = []
     for access_log, employee, guest, camera in results:
-        if employee:
-            full_name = f"{employee.last_name} {employee.first_name}"
-            if employee.middle_name:
-                full_name += f" {employee.middle_name}"
-        elif guest:
-            full_name = f"[Гость] {guest.last_name} {guest.first_name}"
-        else:
-            full_name = "Неизвестное лицо"
-
         response_data.append(
             AccessLogResponse(
                 id=access_log.id,
                 timestamp=access_log.timestamp,
                 status=access_log.status,
-                employee_name=full_name,
+                employee_name=_build_person_name(employee, guest),
                 camera_name=camera.name if camera else "Удаленная камера",
             )
         )
@@ -109,19 +125,12 @@ def get_tracking_logs(session: Session = Depends(get_session), skip: int = 0, li
     results = session.exec(statement).all()
     response_data = []
     for tracking_log, employee, guest, camera in results:
-        if employee:
-            full_name = f"{employee.last_name} {employee.first_name}"
-        elif guest:
-            full_name = f"[Гость] {guest.last_name} {guest.first_name}"
-        else:
-            full_name = "Неизвестное лицо"
-
         response_data.append(
             TrackingLogResponse(
                 id=tracking_log.id,
                 timestamp=tracking_log.timestamp,
                 confidence=tracking_log.confidence,
-                employee_name=full_name,
+                employee_name=_build_person_name(employee, guest),
                 camera_name=camera.name if camera else "Неизвестно",
             )
         )
@@ -135,15 +144,10 @@ def get_tracking_logs(session: Session = Depends(get_session), skip: int = 0, li
 )
 def get_dashboard_stats(target_date: str | None = None, session: Session = Depends(get_session)):
     total_employees = session.exec(select(func.count(Employee.id))).one()
-    active_cameras = session.exec(select(func.count(Camera.id)).where(Camera.is_active == True)).one()
-
-    if target_date:
-        try:
-            query_date = datetime.strptime(target_date, "%Y-%m-%d").date()
-        except ValueError:
-            query_date = date.today()
-    else:
-        query_date = date.today()
+    active_cameras = session.exec(
+        select(func.count(Camera.id)).where(Camera.is_active.is_(True))
+    ).one()
+    query_date = _parse_target_date(target_date)
 
     accesses_today = session.exec(
         select(func.count(AccessLog.id)).where(func.date(AccessLog.timestamp) == query_date)
@@ -161,13 +165,7 @@ def get_dashboard_stats(target_date: str | None = None, session: Session = Depen
     dependencies=[Depends(require_roles(*BASIC_ANALYTICS_ROLES))],
 )
 def get_daily_chart(target_date: str | None = None, session: Session = Depends(get_session)):
-    if target_date:
-        try:
-            query_date = datetime.strptime(target_date, "%Y-%m-%d").date()
-        except ValueError:
-            query_date = date.today()
-    else:
-        query_date = date.today()
+    query_date = _parse_target_date(target_date)
 
     statement = (
         select(
@@ -235,28 +233,23 @@ def get_monthly_days_chart(session: Session = Depends(get_session)):
     dependencies=[Depends(require_roles(*FULL_ANALYTICS_ROLES))],
 )
 def get_presence(target_date: str | None = None, session: Session = Depends(get_session)):
-    if target_date:
-        try:
-            query_date = datetime.strptime(target_date, "%Y-%m-%d").date()
-        except ValueError:
-            query_date = date.today()
-    else:
-        query_date = date.today()
-
-    total_active = session.exec(select(func.count(Employee.id)).where(Employee.is_active == True)).one()
+    query_date = _parse_target_date(target_date)
+    total_active = session.exec(
+        select(func.count(Employee.id)).where(Employee.is_active.is_(True))
+    ).one()
 
     present_employees = session.exec(
         select(func.count(func.distinct(AccessLog.employee_id)))
         .where(func.date(AccessLog.timestamp) == query_date)
         .where(AccessLog.status == "granted")
-        .where(AccessLog.employee_id != None)
+        .where(AccessLog.employee_id.is_not(None))
     ).one()
 
     present_guests = session.exec(
         select(func.count(func.distinct(AccessLog.guest_id)))
         .where(func.date(AccessLog.timestamp) == query_date)
         .where(AccessLog.status == "granted")
-        .where(AccessLog.guest_id != None)
+        .where(AccessLog.guest_id.is_not(None))
     ).one()
 
     percentage = int((present_employees / total_active * 100)) if total_active > 0 else 0
@@ -293,7 +286,7 @@ def get_daily_attendance(target_date: date, session: Session = Depends(get_sessi
     employees = session.exec(
         select(Employee, Department)
         .join(Department, isouter=True)
-        .where(Employee.is_active == True)
+        .where(Employee.is_active.is_(True))
     ).all()
     
     start_of_day = datetime.combine(target_date, datetime.min.time())
@@ -305,7 +298,7 @@ def get_daily_attendance(target_date: date, session: Session = Depends(get_sessi
         .where(AccessLog.timestamp >= start_of_day)
         .where(AccessLog.timestamp <= end_of_day)
         .where(AccessLog.status == "granted")
-        .where(AccessLog.employee_id != None)
+        .where(AccessLog.employee_id.is_not(None))
         .order_by(AccessLog.timestamp)
     ).all()
 
@@ -369,7 +362,7 @@ def get_daily_guests(target_date: date, session: Session = Depends(get_session))
         .where(AccessLog.timestamp >= start_of_day)
         .where(AccessLog.timestamp <= end_of_day)
         .where(AccessLog.status == "granted")
-        .where(AccessLog.guest_id != None)
+        .where(AccessLog.guest_id.is_not(None))
         .order_by(AccessLog.timestamp)
     ).all()
 
@@ -472,7 +465,7 @@ def get_discipline_stats(session: Session = Depends(get_session)):
             func.extract("year", AccessLog.timestamp) == today.year,
             AccessLog.status == "granted",
             Camera.direction.in_(["in", "both"]),
-            AccessLog.employee_id != None,
+            AccessLog.employee_id.is_not(None),
         )
     )
     logs = session.exec(statement).all()

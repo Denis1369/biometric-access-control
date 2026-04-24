@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 import re
@@ -16,6 +17,7 @@ from app.models.logs import AccessLog
 from app.services.recognition_service import find_matching_employee
 from app.services.video_readers import BaseFrameReader, create_frame_reader
 
+logger = logging.getLogger(__name__)
 ml_lock = threading.Lock()
 try:
     RESAMPLE_LANCZOS = Image.Resampling.LANCZOS
@@ -164,7 +166,11 @@ class CameraStreamWorker:
                 self.reader = reader
             return reader
         except Exception as exc:
-            print(f"[Камера {self.camera_id}] Ошибка открытия источника: {exc}")
+            logger.warning(
+                "Камера %s: ошибка открытия источника %s",
+                self.camera_id,
+                exc,
+            )
             return None
 
     def _wait_for_recorded_frame(
@@ -275,7 +281,7 @@ class CameraStreamWorker:
                     playback_started_at = None
                     first_frame_timestamp = None
                     last_recorded_frame_at = None
-                    print(f"[Камера {self.camera_id}] Поток подключен (PyAV)")
+                    logger.info("Камера %s: поток подключен", self.camera_id)
 
                 result = reader.read()
                 if result is None:
@@ -288,7 +294,10 @@ class CameraStreamWorker:
                         last_recorded_frame_at = None
                         continue
 
-                    print(f"[Камера {self.camera_id}] Поток недоступен, переподключение...")
+                    logger.warning(
+                        "Камера %s: поток недоступен, переподключение",
+                        self.camera_id,
+                    )
                     self._set_latest_frame(None)
                     self._release_reader()
                     time.sleep(reconnect_delay)
@@ -325,8 +334,8 @@ class CameraStreamWorker:
                 self._set_latest_frame(image_bytes)
                 self._set_recognition_frame(image_bytes)
                 last_encode_time = current_time
-            except Exception as exc:
-                print(f"[Камера {self.camera_id}] Ошибка захвата: {exc}")
+            except Exception:
+                logger.exception("Камера %s: ошибка захвата кадра", self.camera_id)
                 self._release_reader()
                 time.sleep(reconnect_delay)
 
@@ -347,8 +356,8 @@ class CameraStreamWorker:
                     self._handle_access(frame_bytes)
 
                 time.sleep(self.recognition_interval)
-            except Exception as exc:
-                print(f"[Камера {self.camera_id}] Ошибка распознавания: {exc}")
+            except Exception:
+                logger.exception("Камера %s: ошибка распознавания", self.camera_id)
                 time.sleep(0.5)
 
     def _handle_access(self, image_bytes: bytes):
@@ -371,7 +380,13 @@ class CameraStreamWorker:
                     session.add(log)
                     session.commit()
                     badge = "[ГОСТЬ]" if person_type == "guest" else "[СОТРУДНИК]"
-                    print(f"[Камера {self.camera_id}] Проход: {badge} {person.last_name} {person.first_name}")
+                    logger.info(
+                        "Камера %s: проход %s %s %s",
+                        self.camera_id,
+                        badge,
+                        person.last_name,
+                        person.first_name,
+                    )
 
             elif person is None and distance is not None:
                 last_seen = self.cooldowns.get("unknown", 0)
@@ -380,7 +395,10 @@ class CameraStreamWorker:
                     log = AccessLog(employee_id=None, camera_id=self.camera_id, status="denied")
                     session.add(log)
                     session.commit()
-                    print(f"[Камера {self.camera_id}] Тревога: Неизвестное лицо!")
+                    logger.warning(
+                        "Камера %s: тревога, обнаружено неизвестное лицо",
+                        self.camera_id,
+                    )
 
 
 class StreamManager:
@@ -390,7 +408,7 @@ class StreamManager:
 
     def start_all(self):
         with Session(engine) as session:
-            cameras = session.exec(select(Camera).where(Camera.is_active == True)).all()
+            cameras = session.exec(select(Camera).where(Camera.is_active.is_(True))).all()
             for cam in cameras:
                 self.add_camera(cam.id, cam.ip_address, cam.direction)
 
@@ -400,14 +418,14 @@ class StreamManager:
         with self.lock:
             self.workers[camera_id] = worker
         worker.start()
-        print(f"[StreamManager] Запущен поток для камеры {camera_id}")
+        logger.info("Запущен поток для камеры %s", camera_id)
 
     def remove_camera(self, camera_id: int):
         with self.lock:
             worker = self.workers.pop(camera_id, None)
         if worker:
             worker.stop()
-            print(f"[StreamManager] Остановлен поток для камеры {camera_id}")
+            logger.info("Остановлен поток для камеры %s", camera_id)
 
     def get_latest_frame(self, camera_id: int, max_age_sec: float = 3.0):
         with self.lock:

@@ -2,11 +2,10 @@ from typing import Callable
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError, jwt
 from sqlmodel import Session
 
 from app.core.database import get_session
-from app.core.security import ALGORITHM, SECRET_KEY
+from app.core.security import decode_access_token_subject
 from app.models.user import User, UserRole
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
@@ -27,13 +26,8 @@ def get_current_user(
     if not raw_token:
         raise credentials_exception
 
-    try:
-        payload = jwt.decode(raw_token, SECRET_KEY, algorithms=[ALGORITHM])
-        sub = payload.get("sub")
-        if sub is None:
-            raise credentials_exception
-        user_id = int(sub)
-    except (JWTError, ValueError, TypeError):
+    user_id = decode_access_token_subject(raw_token)
+    if user_id is None:
         raise credentials_exception
 
     user = session.get(User, user_id)

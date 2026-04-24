@@ -1,10 +1,11 @@
 import json
+import logging
 from datetime import datetime
 from typing import List
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import SQLModel, Session, select
+from sqlmodel import Field, SQLModel, Session, select
 
 from app.core.database import get_session
 from app.core.deps import require_roles
@@ -15,6 +16,7 @@ from app.models.user import UserRole
 from app.services.photo_conversion import extract_face_encoding
 
 router = APIRouter(prefix="/api/employees", tags=["Сотрудники"])
+logger = logging.getLogger(__name__)
 
 READ_ROLES = (
     UserRole.SUPER_ADMIN,
@@ -42,7 +44,24 @@ class EmployeeListItem(SQLModel):
 
 
 class EmployeeDetail(EmployeeListItem):
-    face_samples: list[EmployeeFaceSampleRead] = []
+    face_samples: list[EmployeeFaceSampleRead] = Field(default_factory=list)
+
+
+def _normalize_required_text(value: str, field_name: str) -> str:
+    normalized = value.strip()
+    if not normalized:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Поле {field_name} не может быть пустым",
+        )
+    return normalized
+
+
+def _normalize_optional_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
 
 
 def parse_delete_sample_ids(raw: str | None) -> list[int]:
@@ -184,10 +203,10 @@ async def create_employee(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Некорректный индекс основной фотографии")
 
     employee = Employee(
-        last_name=last_name.strip(),
-        first_name=first_name.strip(),
-        middle_name=middle_name.strip() if middle_name else None,
-        position=position.strip() if position else None,
+        last_name=_normalize_required_text(last_name, "last_name"),
+        first_name=_normalize_required_text(first_name, "first_name"),
+        middle_name=_normalize_optional_text(middle_name),
+        position=_normalize_optional_text(position),
         department_id=department_id,
         is_active=True,
     )
@@ -204,7 +223,7 @@ async def create_employee(
 
             try:
                 face_vector = extract_face_encoding(image_bytes)
-            except HTTPException:
+            except ValueError:
                 continue
 
             sample = EmployeeFaceSample(
@@ -239,11 +258,12 @@ async def create_employee(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Ошибка целостности данных при создании сотрудника",
         )
-    except Exception as e:
+    except Exception:
         session.rollback()
+        logger.exception("Не удалось создать сотрудника")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Ошибка при создании сотрудника: {str(e)}",
+            detail="Не удалось создать сотрудника из-за внутренней ошибки",
         )
 
 
@@ -313,13 +333,13 @@ async def update_employee(
             )
 
     if last_name is not None:
-        employee.last_name = last_name.strip()
+        employee.last_name = _normalize_required_text(last_name, "last_name")
     if first_name is not None:
-        employee.first_name = first_name.strip()
+        employee.first_name = _normalize_required_text(first_name, "first_name")
     if middle_name is not None:
-        employee.middle_name = middle_name.strip() if middle_name else None
+        employee.middle_name = _normalize_optional_text(middle_name)
     if position is not None:
-        employee.position = position.strip() if position else None
+        employee.position = _normalize_optional_text(position)
     if department_id is not None:
         employee.department_id = department_id
     if is_active is not None:
@@ -347,7 +367,7 @@ async def update_employee(
 
             try:
                 face_vector = extract_face_encoding(image_bytes)
-            except HTTPException:
+            except ValueError:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Не удалось выделить лицо на новой фотографии #{index + 1}",
@@ -401,9 +421,10 @@ async def update_employee(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Ошибка целостности данных при обновлении сотрудника",
         )
-    except Exception as e:
+    except Exception:
         session.rollback()
+        logger.exception("Не удалось обновить сотрудника %s", employee_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Ошибка при обновлении сотрудника: {str(e)}",
+            detail="Не удалось обновить сотрудника из-за внутренней ошибки",
         )

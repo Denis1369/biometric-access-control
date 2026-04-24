@@ -1,5 +1,6 @@
 import { computed, reactive } from 'vue'
 import { authApi } from '../api/auth'
+import { ROLE_HOME_ROUTES } from '../constants/roles'
 import {
   clearStoredAuth,
   getStoredToken,
@@ -14,11 +15,6 @@ const state = reactive({
   initialized: false,
   loading: false,
 })
-
-const roleHomeMap = {
-  super_admin: '/',
-  checkpoint_operator: '/route',
-}
 
 function clearState() {
   clearStoredAuth()
@@ -73,7 +69,7 @@ function hasAnyRole(...roles) {
 }
 
 function getDefaultRoute(role = state.user?.role) {
-  return roleHomeMap[role] || '/login'
+  return ROLE_HOME_ROUTES[role] || '/login'
 }
 
 function isAuthenticated() {

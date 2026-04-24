@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import logging
 import shutil
+from datetime import datetime
 from pathlib import Path
 from typing import List
 
@@ -14,6 +16,7 @@ from app.models.video_analysis import VideoAnalysisEvent, VideoAnalysisJob
 from app.services.video_analysis_service import BASE_STORAGE_DIR, reset_video_analysis_job, schedule_video_analysis
 
 router = APIRouter(prefix="/api/video-analysis", tags=["Анализ видео"])
+logger = logging.getLogger(__name__)
 
 ALLOWED_ROLES = (
     UserRole.SUPER_ADMIN,
@@ -33,9 +36,9 @@ class VideoAnalysisJobRead(SQLModel):
     duration_sec: float | None = None
     granted_count: int
     denied_count: int
-    created_at: str
-    started_at: str | None = None
-    finished_at: str | None = None
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
     error_message: str | None = None
 
 
@@ -51,11 +54,7 @@ class VideoAnalysisEventRead(SQLModel):
     decision: str | None = None
     confidence: float | None = None
     distance: float | None = None
-    created_at: str
-
-
-def _serialize_datetime(value):
-    return value.isoformat() if value else None
+    created_at: datetime
 
 
 def _job_read(job: VideoAnalysisJob) -> VideoAnalysisJobRead:
@@ -69,9 +68,9 @@ def _job_read(job: VideoAnalysisJob) -> VideoAnalysisJobRead:
         duration_sec=job.duration_sec,
         granted_count=job.granted_count,
         denied_count=job.denied_count,
-        created_at=job.created_at.isoformat(),
-        started_at=_serialize_datetime(job.started_at),
-        finished_at=_serialize_datetime(job.finished_at),
+        created_at=job.created_at,
+        started_at=job.started_at,
+        finished_at=job.finished_at,
         error_message=job.error_message,
     )
 
@@ -89,7 +88,7 @@ def _event_read(event: VideoAnalysisEvent) -> VideoAnalysisEventRead:
         decision=event.decision,
         confidence=event.confidence,
         distance=event.distance,
-        created_at=event.created_at.isoformat(),
+        created_at=event.created_at,
     )
 
 
@@ -184,6 +183,9 @@ async def create_job(
     session: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ):
+    if not video.filename:
+        raise HTTPException(status_code=400, detail="Не удалось определить имя видеофайла")
+
     suffix = Path(video.filename or "video").suffix.lower()
     if suffix not in VIDEO_EXTENSIONS:
         raise HTTPException(status_code=400, detail="Поддерживаются только видеофайлы mp4/avi/mov/mkv/webm")
@@ -199,16 +201,31 @@ async def create_job(
     session.refresh(temp_job)
 
     job_dir = BASE_STORAGE_DIR / f"job_{temp_job.id}"
-    job_dir.mkdir(parents=True, exist_ok=True)
     video_path = job_dir / f"source{suffix}"
 
-    with video_path.open("wb") as buffer:
-        shutil.copyfileobj(video.file, buffer)
+    try:
+        job_dir.mkdir(parents=True, exist_ok=True)
+        with video_path.open("wb") as buffer:
+            shutil.copyfileobj(video.file, buffer)
 
-    temp_job.source_path = str(video_path)
-    session.add(temp_job)
-    session.commit()
-    session.refresh(temp_job)
+        temp_job.source_path = str(video_path)
+        session.add(temp_job)
+        session.commit()
+        session.refresh(temp_job)
 
-    schedule_video_analysis(temp_job.id)
-    return _job_read(temp_job)
+        schedule_video_analysis(temp_job.id)
+        return _job_read(temp_job)
+    except Exception:
+        logger.exception("Не удалось создать задачу анализа видео")
+
+        if video_path.exists():
+            video_path.unlink(missing_ok=True)
+        if job_dir.exists() and not any(job_dir.iterdir()):
+            job_dir.rmdir()
+
+        session.delete(temp_job)
+        session.commit()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Не удалось создать задачу анализа видео",
+        )

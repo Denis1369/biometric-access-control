@@ -1,12 +1,16 @@
 import os
 
-os.environ["OMP_NUM_THREADS"] = "4"
-os.environ["OPENBLAS_NUM_THREADS"] = "4"
-os.environ["MKL_NUM_THREADS"] = "4"
-os.environ["VECLIB_MAXIMUM_THREADS"] = "4"
-os.environ["NUMEXPR_NUM_THREADS"] = "4"
+from app.core.config import settings
 
-import platform
+thread_count = str(settings.ml_thread_count)
+
+os.environ["OMP_NUM_THREADS"] = thread_count
+os.environ["OPENBLAS_NUM_THREADS"] = thread_count
+os.environ["MKL_NUM_THREADS"] = thread_count
+os.environ["VECLIB_MAXIMUM_THREADS"] = thread_count
+os.environ["NUMEXPR_NUM_THREADS"] = thread_count
+
+import logging
 import threading
 
 import cv2
@@ -18,14 +22,15 @@ from insightface.app import FaceAnalysis
 _face_app = None
 _face_app_init_lock = threading.Lock()
 _face_app_infer_lock = threading.Lock()
+logger = logging.getLogger(__name__)
 
 
 def _choose_providers() -> list[str]:
     available = set(ort.get_available_providers())
-    
+
     if "CUDAExecutionProvider" in available:
         return ["CUDAExecutionProvider", "CPUExecutionProvider"]
-        
+
     return ["CPUExecutionProvider"]
 
 
@@ -37,8 +42,8 @@ def _build_face_app() -> FaceAnalysis:
     ctx_id = -1 if providers == ["CPUExecutionProvider"] else 0
     app.prepare(ctx_id=ctx_id, det_size=(640, 640))
 
-    print("InsightFace providers:", providers)
-    print("ORT available providers:", ort.get_available_providers())
+    logger.info("InsightFace providers: %s", providers)
+    logger.info("ORT available providers: %s", ort.get_available_providers())
 
     return app
 

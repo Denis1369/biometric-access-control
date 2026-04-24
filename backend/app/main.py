@@ -1,4 +1,4 @@
-import os
+import logging
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -20,16 +20,17 @@ from app.api import (
     video_analysis,
     websockets,
 )
+from app.core.config import settings
 from app.core.database import engine
 from app.core.seed import ensure_demo_data
 from app.services.stream_manager import stream_manager
 
-def get_cors_origins() -> list[str]:
-    raw = os.getenv(
-        "CORS_ALLOW_ORIGINS",
-        "http://localhost:5173,http://127.0.0.1:5173",
-    )
-    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+logging.basicConfig(
+    level=getattr(logging, settings.log_level, logging.INFO),
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+)
+
+logger = logging.getLogger(__name__)
 
 def create_db_and_tables():
     SQLModel.metadata.create_all(engine)
@@ -41,14 +42,14 @@ async def lifespan(app: FastAPI):
     with Session(engine) as session:
         seeded = ensure_demo_data(session)
         if seeded:
-            print("Пустая база обнаружена, демоданные добавлены автоматически.")
+            logger.info("Пустая база обнаружена, демоданные добавлены автоматически.")
 
-    print("Запуск фонового анализа видеопотоков...")
+    logger.info("Запуск фонового анализа видеопотоков...")
     stream_manager.start_all()
     
     yield
 
-    print("Остановка потоков...")
+    logger.info("Остановка потоков...")
     for cam_id in list(stream_manager.workers.keys()):
         stream_manager.remove_camera(cam_id)
 
@@ -59,7 +60,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=get_cors_origins(),
+    allow_origins=settings.cors_allow_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

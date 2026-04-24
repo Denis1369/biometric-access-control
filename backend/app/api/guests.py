@@ -1,4 +1,5 @@
 from datetime import datetime
+import logging
 from typing import List
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
@@ -12,6 +13,7 @@ from app.models.user import UserRole
 from app.services.photo_conversion import extract_face_encoding
 
 router = APIRouter(prefix="/api/guests", tags=["Гости"])
+logger = logging.getLogger(__name__)
 
 READ_ROLES = (
     UserRole.SUPER_ADMIN,
@@ -123,7 +125,7 @@ async def create_guest(
 
         try:
             face_vector = extract_face_encoding(image_bytes)
-        except Exception:
+        except ValueError:
             raise HTTPException(status_code=400, detail="Не удалось распознать лицо на фото")
 
         sample = GuestFaceSample(
@@ -141,9 +143,10 @@ async def create_guest(
     except HTTPException:
         session.rollback()
         raise
-    except Exception as e:
+    except Exception:
         session.rollback()
-        raise HTTPException(status_code=500, detail=f"Ошибка создания гостя: {str(e)}")
+        logger.exception("Не удалось создать гостя")
+        raise HTTPException(status_code=500, detail="Не удалось создать гостя из-за внутренней ошибки")
 
 
 @router.patch(

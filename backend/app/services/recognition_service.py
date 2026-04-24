@@ -5,7 +5,6 @@ from sqlmodel import Session, select
 from app.models.employee_face_samples import EmployeeFaceSample
 from app.models.employees import Employee
 from app.models.guests import GuestFaceSample, Guest
-from app.models.logs import AccessLog
 from app.services.photo_conversion import extract_face_encoding
 
 INSIGHTFACE_COSINE_DISTANCE_AUTO_ALLOW = 0.78
@@ -18,8 +17,17 @@ def cosine_distance(vec_a: np.ndarray, vec_b: np.ndarray) -> float:
     return float(1.0 - np.dot(vec_a / norm_a, vec_b / norm_b))
 
 def _find_best_match_for_vector(vector_a: np.ndarray, session: Session):
-    active_emp = set(session.exec(select(Employee.id).where(Employee.is_active == True)).all())
-    active_guests = set(session.exec(select(Guest.id).where(Guest.is_active == True, Guest.valid_until > datetime.now())).all())
+    active_emp = set(
+        session.exec(select(Employee.id).where(Employee.is_active.is_(True))).all()
+    )
+    active_guests = set(
+        session.exec(
+            select(Guest.id).where(
+                Guest.is_active.is_(True),
+                Guest.valid_until > datetime.now(),
+            )
+        ).all()
+    )
 
     best_person_id = None
     best_person_type = None

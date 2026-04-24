@@ -1,20 +1,29 @@
 const TOKEN_KEY = 'skud_access_token'
 const USER_KEY = 'skud_current_user'
 
+function getStorage() {
+  if (typeof window === 'undefined' || !window.localStorage) {
+    return null
+  }
+  return window.localStorage
+}
+
 export function getStoredToken() {
-  return localStorage.getItem(TOKEN_KEY) || ''
+  return getStorage()?.getItem(TOKEN_KEY) || ''
 }
 
 export function setStoredToken(token) {
+  const storage = getStorage()
+  if (!storage) return
   if (!token) {
-    localStorage.removeItem(TOKEN_KEY)
+    storage.removeItem(TOKEN_KEY)
     return
   }
-  localStorage.setItem(TOKEN_KEY, token)
+  storage.setItem(TOKEN_KEY, token)
 }
 
 export function getStoredUser() {
-  const raw = localStorage.getItem(USER_KEY)
+  const raw = getStorage()?.getItem(USER_KEY)
   if (!raw) return null
   try {
     return JSON.parse(raw)
@@ -24,14 +33,18 @@ export function getStoredUser() {
 }
 
 export function setStoredUser(user) {
+  const storage = getStorage()
+  if (!storage) return
   if (!user) {
-    localStorage.removeItem(USER_KEY)
+    storage.removeItem(USER_KEY)
     return
   }
-  localStorage.setItem(USER_KEY, JSON.stringify(user))
+  storage.setItem(USER_KEY, JSON.stringify(user))
 }
 
 export function clearStoredAuth() {
-  localStorage.removeItem(TOKEN_KEY)
-  localStorage.removeItem(USER_KEY)
+  const storage = getStorage()
+  if (!storage) return
+  storage.removeItem(TOKEN_KEY)
+  storage.removeItem(USER_KEY)
 }

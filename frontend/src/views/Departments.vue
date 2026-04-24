@@ -179,6 +179,7 @@ const loadData = async () => {
   } catch {
     departments.value = []
     allPositions.value = []
+    ui.error('Не удалось загрузить отделы и должности')
   }
 }
 

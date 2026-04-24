@@ -59,16 +59,12 @@ import { computed } from 'vue'
 import ConfirmDialog from 'primevue/confirmdialog'
 import Toast from 'primevue/toast'
 import { useRoute, useRouter } from 'vue-router'
+import { ROLE_LABELS } from './constants/roles'
 import { useAuth } from './services/auth'
 
 const auth = useAuth()
 const route = useRoute()
 const router = useRouter()
-
-const roleLabels = {
-  super_admin: 'Super Admin',
-  checkpoint_operator: 'Оператор КПП',
-}
 
 const navItems = [
   { to: '/', label: 'Дашборд', icon: 'pi pi-home', roles: ['super_admin'] },
@@ -83,7 +79,7 @@ const navItems = [
 ]
 
 const visibleNavItems = computed(() => navItems.filter((item) => auth.hasAnyRole(...item.roles)))
-const currentRoleLabel = computed(() => roleLabels[auth.role.value] || 'Пользователь')
+const currentRoleLabel = computed(() => ROLE_LABELS[auth.role.value] || 'Пользователь')
 
 function handleLogout() {
   auth.logout({ redirect: false })

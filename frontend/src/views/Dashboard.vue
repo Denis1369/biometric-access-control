@@ -164,8 +164,10 @@ import { ref, onMounted, computed } from 'vue'
 import Chart from 'primevue/chart'
 import { analyticsApi } from '../api/analytics'
 import { departmentsApi } from '../api/departments'
+import { useUi } from '../services/ui'
 
 defineOptions({ name: 'DashboardPage' })
+const ui = useUi()
 
 const toLocalDateInputValue = (value = new Date()) => {
   const offsetMs = value.getTimezoneOffset() * 60000
@@ -262,7 +264,9 @@ const onGlobalDateChange = async () => {
       analyticsApi.getDailyGuests(globalDate.value)
     ])
     updateDailyWidgets(dailyRes, employeesRes, guestsRes)
-  } catch (error) { console.error(error) }
+  } catch (error) {
+    ui.error(ui.getErrorMessage(error, 'Не удалось обновить данные дашборда'))
+  }
 }
 
 const loadDashboardData = async () => {
@@ -287,7 +291,9 @@ const loadDashboardData = async () => {
         fill: true, tension: 0.4, data: daysRes.data.data
       }]
     }
-  } catch (error) { console.error(error) }
+  } catch (error) {
+    ui.error(ui.getErrorMessage(error, 'Не удалось загрузить дашборд'))
+  }
 }
 
 onMounted(() => { loadDashboardData() })

@@ -110,6 +110,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { usersApi } from '../api/users'
 import { employeesApi } from '../api/employees'
+import { ASSIGNABLE_ROLE_OPTIONS, ROLE_LABELS } from '../constants/roles'
 import { useUi } from '../services/ui'
 
 defineOptions({ name: 'UsersPage' })
@@ -120,16 +121,8 @@ const employees = ref([])
 const displayDialog = ref(false)
 const isEditMode = ref(false)
 
-
-const roleLabels = {
-  super_admin: 'Super Admin',
-  checkpoint_operator: 'Оператор КПП',
-}
-
-const roleOptions = [
-  { value: 'super_admin', label: 'Super Admin' },
-  { value: 'checkpoint_operator', label: 'Оператор КПП' },
-]
+const roleLabels = ROLE_LABELS
+const roleOptions = ASSIGNABLE_ROLE_OPTIONS
 
 const form = ref({
   id: null,

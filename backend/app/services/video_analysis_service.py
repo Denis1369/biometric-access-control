@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -21,6 +22,7 @@ BASE_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
 _active_jobs: set[int] = set()
 _active_jobs_lock = threading.Lock()
+logger = logging.getLogger(__name__)
 
 
 def _job_dir(job_id: int) -> Path:
@@ -267,6 +269,7 @@ def _run_job(job_id: int):
             finished_at=datetime.now(),
         )
     except Exception as exc:
+        logger.exception("Ошибка анализа видео для задачи %s", job_id)
         _update_job_status(
             job_id,
             'failed',

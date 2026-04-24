@@ -301,7 +301,7 @@ const updateStreamState = (cameraId, patch) => {
     [cameraId]: {
       hasFrame: false,
       error: '',
-      ...(streamStates.value[cameraId] || {}),
+      ...streamStates.value[cameraId],
       ...patch,
     },
   }

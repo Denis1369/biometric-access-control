@@ -1,15 +1,16 @@
 import asyncio
+import logging
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from jose import JWTError, jwt
 from sqlmodel import Session
 
 from app.core.database import engine
-from app.core.security import ALGORITHM, SECRET_KEY
+from app.core.security import decode_access_token_subject
 from app.models.user import User, UserRole
 from app.services.stream_manager import stream_manager
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 ALLOWED_ROLES = {
@@ -22,13 +23,8 @@ def _get_user_from_token(token: str | None) -> User | None:
     if not token:
         return None
 
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        sub = payload.get("sub")
-        if sub is None:
-            return None
-        user_id = int(sub)
-    except (JWTError, ValueError, TypeError):
+    user_id = decode_access_token_subject(token)
+    if user_id is None:
         return None
 
     with Session(engine) as session:
@@ -68,6 +64,7 @@ async def video_endpoint(websocket: WebSocket, camera_id: int):
     except WebSocketDisconnect:
         pass
     except Exception:
+        logger.exception("WebSocket видеопотока камеры %s завершился с ошибкой", camera_id)
         try:
             await websocket.close()
         except Exception:
