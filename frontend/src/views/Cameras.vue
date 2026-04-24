@@ -16,7 +16,7 @@
         <input 
           type="text" 
           v-model="searchQuery" 
-          placeholder="Поиск по названию или IP..." 
+          placeholder="Поиск по названию или источнику..." 
         />
       </div>
 
@@ -64,7 +64,10 @@
           
           <h3 class="cam-name">{{ cam.name }}</h3>
           <div class="cam-ip">
-            <i class="pi pi-link"></i> {{ cam.ip_address }}
+            <i :class="cameraSourceIcon(cam)"></i> {{ formatCameraSource(cam) }}
+          </div>
+          <div class="cam-source-type" :class="cameraSourceKind(cam)">
+            {{ cameraSourceKind(cam) === 'video_file' ? 'Демо-видео' : 'Камера / поток' }}
           </div>
           
           <div class="cam-direction">
@@ -107,8 +110,11 @@
 
         <div class="form-grid">
           <div class="form-group">
-            <label>IP или RTSP адрес <span class="required">*</span></label>
-            <input type="text" v-model="cameraForm.ip_address" class="form-input" placeholder="rtsp://admin:123@..." />
+            <label>Источник видео <span class="required">*</span></label>
+            <select v-model="cameraForm.source_mode" class="form-input">
+              <option value="stream">Камера / RTSP поток</option>
+              <option value="video_file">Видео-файл для демо</option>
+            </select>
           </div>
 
           <div class="form-group">
@@ -120,6 +126,23 @@
               <option value="internal">Внутренняя (Наблюдение внутри зоны)</option>
             </select>
           </div>
+        </div>
+
+        <div class="form-group full-width">
+          <label>{{ cameraForm.source_mode === 'video_file' ? 'Путь к видеофайлу' : 'IP или RTSP адрес' }} <span class="required">*</span></label>
+          <input
+            type="text"
+            v-model="cameraForm.source_input"
+            class="form-input"
+            :placeholder="cameraForm.source_mode === 'video_file' ? 'storage/demo/demo-entry.mp4 или C:\\Videos\\demo.mp4' : 'rtsp://admin:123@...'"
+          />
+          <span class="field-hint">
+            {{
+              cameraForm.source_mode === 'video_file'
+                ? 'Видео будет проигрываться как камера, в реальном темпе и по кругу. Относительный путь считается от корня проекта.'
+                : 'Используйте RTSP, HTTP-поток или другой адрес живой камеры.'
+            }}
+          </span>
         </div>
 
         <div class="form-group checkbox-group">
@@ -188,17 +211,52 @@ const isEditMode = ref(false)
 const selectedCamera = ref(null)
 const savingCamera = ref(false)
 
-// === НОВЫЕ ПЕРЕМЕННЫЕ ДЛЯ ФИЛЬТРАЦИИ ===
 const searchQuery = ref('')
 const selectedDirection = ref('all')
 const selectedStatus = ref('all')
+const VIDEO_FILE_PREFIX = 'file://'
 
-const cameraForm = ref({
+const createEmptyCameraForm = () => ({
   id: null,
   name: '',
   ip_address: '',
+  source_mode: 'stream',
+  source_input: '',
   direction: 'internal',
   is_active: true
+})
+
+const parseCameraSource = (rawValue) => {
+  const normalized = typeof rawValue === 'string' ? rawValue.trim() : ''
+  if (normalized.toLowerCase().startsWith(VIDEO_FILE_PREFIX)) {
+    return {
+      source_mode: 'video_file',
+      source_input: normalized.slice(VIDEO_FILE_PREFIX.length)
+    }
+  }
+
+  return {
+    source_mode: 'stream',
+    source_input: normalized
+  }
+}
+
+const buildCameraSourceValue = (sourceMode, sourceInput) => {
+  const normalized = sourceInput.trim()
+  return sourceMode === 'video_file'
+    ? `${VIDEO_FILE_PREFIX}${normalized.replace(/^file:\/\//i, '')}`
+    : normalized
+}
+
+const cameraSourceKind = (camera) => parseCameraSource(camera?.ip_address).source_mode
+const cameraSourceValue = (camera) => parseCameraSource(camera?.ip_address).source_input
+const cameraSourceIcon = (camera) => (
+  cameraSourceKind(camera) === 'video_file' ? 'pi pi-file' : 'pi pi-link'
+)
+const formatCameraSource = (camera) => cameraSourceValue(camera)
+
+const cameraForm = ref({
+  ...createEmptyCameraForm()
 })
 
 const hasVideoFrame = ref(false)
@@ -240,19 +298,15 @@ const loadData = async () => {
   }
 }
 
-// === ВЫЧИСЛЯЕМОЕ СВОЙСТВО ДЛЯ ФИЛЬТРАЦИИ КАРТОЧЕК ===
 const filteredCameras = computed(() => {
   return cameras.value.filter(cam => {
-    // 1. Поиск по имени или IP
     const query = searchQuery.value.toLowerCase()
     const matchesSearch = cam.name.toLowerCase().includes(query) || 
-                          cam.ip_address.toLowerCase().includes(query)
+                          formatCameraSource(cam).toLowerCase().includes(query)
     
-    // 2. Фильтр по направлению
     const matchesDirection = selectedDirection.value === 'all' || 
                              cam.direction === selectedDirection.value
     
-    // 3. Фильтр по статусу
     const matchesStatus = selectedStatus.value === 'all' ||
                           (selectedStatus.value === 'active' && cam.is_active) ||
                           (selectedStatus.value === 'offline' && !cam.is_active)
@@ -281,14 +335,21 @@ const toggleCameraStatus = async (cam) => {
 const openNewDialog = () => {
   if (!canManageCameras.value) return
   isEditMode.value = false
-  cameraForm.value = { id: null, name: '', ip_address: '', direction: 'internal', is_active: true }
+  cameraForm.value = createEmptyCameraForm()
   displayDialog.value = true
 }
 
 const openEditDialog = (camera) => {
   if (!canManageCameras.value) return
   isEditMode.value = true
-  cameraForm.value = { ...camera, direction: camera.direction || 'internal' }
+  const source = parseCameraSource(camera.ip_address)
+  cameraForm.value = {
+    ...createEmptyCameraForm(),
+    ...camera,
+    source_mode: source.source_mode,
+    source_input: source.source_input,
+    direction: camera.direction || 'internal'
+  }
   displayDialog.value = true
 }
 
@@ -301,10 +362,10 @@ const saveCamera = async () => {
   if (!canManageCameras.value) return
   if (savingCamera.value) return
   const name = cameraForm.value.name.trim()
-  const ipAddress = cameraForm.value.ip_address.trim()
+  const sourceInput = cameraForm.value.source_input.trim()
 
-  if (!name || !ipAddress) {
-    ui.warn('Заполните название и адрес камеры')
+  if (!name || !sourceInput) {
+    ui.warn('Заполните название и источник видео')
     return
   }
 
@@ -313,7 +374,7 @@ const saveCamera = async () => {
     const wasEditMode = isEditMode.value
     const payload = {
       name,
-      ip_address: ipAddress,
+      ip_address: buildCameraSourceValue(cameraForm.value.source_mode, sourceInput),
       direction: cameraForm.value.direction,
       is_active: cameraForm.value.is_active
     }
@@ -442,7 +503,10 @@ onBeforeUnmount(() => {
 .cam-icon-wrapper.disabled-icon { background: #e2e8f0; color: #94a3b8; }
 
 .cam-name { margin: 0 0 0.5rem 0; color: #0f172a; font-size: 1.15rem; font-weight: 700; }
-.cam-ip { color: #64748b; font-size: 0.85rem; font-family: monospace; background: #f8fafc; padding: 0.3rem 0.6rem; border-radius: 6px; border: 1px solid #e2e8f0; margin-bottom: 1.25rem; display: inline-flex; align-items: center; gap: 0.4rem; }
+.cam-ip { color: #64748b; font-size: 0.85rem; font-family: monospace; background: #f8fafc; padding: 0.3rem 0.6rem; border-radius: 6px; border: 1px solid #e2e8f0; margin-bottom: 0.6rem; display: inline-flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 0.4rem; max-width: 100%; word-break: break-word; }
+.cam-source-type { margin-bottom: 1.25rem; padding: 0.2rem 0.6rem; border-radius: 999px; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; }
+.cam-source-type.stream { background: #dbeafe; color: #1d4ed8; }
+.cam-source-type.video_file { background: #ecfccb; color: #3f6212; }
 
 .cam-direction { width: 100%; display: flex; justify-content: center; }
 .dir-badge { display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.5rem 1rem; border-radius: 8px; font-size: 0.85rem; font-weight: 600; width: 100%; justify-content: center; }
@@ -476,6 +540,7 @@ onBeforeUnmount(() => {
 .form-group { display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 1.25rem; }
 .form-group.full-width { grid-column: 1 / -1; }
 .form-group label { font-size: 0.85rem; font-weight: 600; color: #475569; }
+.field-hint { color: #64748b; font-size: 0.82rem; line-height: 1.4; }
 .required { color: #ef4444; }
 
 .form-input { 

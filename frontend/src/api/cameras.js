@@ -27,6 +27,9 @@ export const camerasApi = {
     return apiClient.patch(`/cameras/${id}`, payload)
   },
 
+  setDemoRecognition(id, payload) {
+    return apiClient.post(`/cameras/${id}/demo-recognition`, payload)
+  },
 
   getSnapshot(id) {
     return apiClient.get(`/cameras/${id}/snapshot`, { responseType: 'blob' })

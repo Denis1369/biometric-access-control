@@ -199,13 +199,16 @@ const ui = useUi()
 const availableCameras = ref([])
 const employees = ref([])
 const selectedCameraIds = ref([]) // Массив выбранных ID
+const VIDEO_FILE_PREFIX = 'file://'
 
 const streamStates = ref({})
 const streamPlayers = {}
 const streamCanvases = {}
+const streamReadyResolvers = {}
 
 const logs = ref([])
 let logInterval = null
+let demoRecognitionHeartbeat = null
 
 const displayGuestDialog = ref(false)
 const snapshotCameraId = ref('')
@@ -239,6 +242,9 @@ const getCameraName = (id) => {
   const cam = availableCameras.value.find(c => c.id === id)
   return cam ? cam.name : 'Неизвестная камера'
 }
+
+const isDemoCamera = (camera) => String(camera?.ip_address || '').trim().toLowerCase().startsWith(VIDEO_FILE_PREFIX)
+const isDemoCameraId = (cameraId) => isDemoCamera(availableCameras.value.find((camera) => camera.id === cameraId))
 
 const getEmployeeFullName = (employee) => [employee.last_name, employee.first_name, employee.middle_name].filter(Boolean).join(' ')
 const selectedEmployeeName = computed(() => {
@@ -317,16 +323,54 @@ const registerStreamCanvas = (cameraId, element) => {
 
 const hasStreamFrame = (cameraId) => Boolean(streamStates.value[cameraId]?.hasFrame)
 
+const resolveStreamReady = (cameraId, payload = { ok: true }) => {
+  const resolver = streamReadyResolvers[cameraId]
+  if (!resolver) return
+  delete streamReadyResolvers[cameraId]
+  resolver(payload)
+}
+
+const setDemoRecognitionState = async (cameraId, enabled, { silent = false } = {}) => {
+  if (!isDemoCameraId(cameraId)) return
+
+  try {
+    await camerasApi.setDemoRecognition(cameraId, { enabled })
+  } catch (error) {
+    if (!silent) {
+      ui.error(ui.getErrorMessage(error, `Не удалось ${enabled ? 'включить' : 'выключить'} анализ демо-камеры`))
+    } else {
+      console.error(`Ошибка переключения демо-анализа камеры ${cameraId}:`, error)
+    }
+  }
+}
+
+const refreshSelectedDemoRecognition = async () => {
+  const selectedDemoIds = selectedCameraIds.value.filter(
+    (cameraId) => isDemoCameraId(cameraId) && hasStreamFrame(cameraId)
+  )
+  if (selectedDemoIds.length === 0) return
+
+  await Promise.allSettled(
+    selectedDemoIds.map((cameraId) => camerasApi.setDemoRecognition(cameraId, { enabled: true }))
+  )
+}
+
 const toggleCameraStream = async (cameraId) => {
   if (selectedCameraIds.value.includes(cameraId)) {
-    await startSingleStream(cameraId)
+    const started = await startSingleStream(cameraId)
+    if (started) {
+      await setDemoRecognitionState(cameraId, true)
+    }
   } else {
+    await setDemoRecognitionState(cameraId, false)
     stopSingleStream(cameraId)
   }
 }
 
 const startSingleStream = async (cameraId) => {
-  if (streamPlayers[cameraId]) return
+  if (streamPlayers[cameraId]) {
+    return hasStreamFrame(cameraId)
+  }
 
   updateStreamState(cameraId, { hasFrame: false, error: '' })
   await nextTick()
@@ -334,27 +378,44 @@ const startSingleStream = async (cameraId) => {
   const canvas = streamCanvases[cameraId]
   if (!canvas) {
     updateStreamState(cameraId, { error: 'Плеер не готов' })
-    return
+    return false
   }
+
+  const streamReadyPromise = new Promise((resolve) => {
+    streamReadyResolvers[cameraId] = resolve
+  })
+  const readyTimeout = window.setTimeout(() => {
+    resolveStreamReady(cameraId, { ok: false, reason: 'timeout' })
+  }, 4000)
 
   streamPlayers[cameraId] = createCanvasStreamPlayer({
     url: buildWsUrl(`/ws/video/${cameraId}`),
     canvas,
     onFirstFrame: () => {
       updateStreamState(cameraId, { hasFrame: true, error: '' })
+      resolveStreamReady(cameraId, { ok: true })
     },
     onError: () => {
       console.error(`Ошибка видеопотока камеры ${cameraId}`)
       updateStreamState(cameraId, { hasFrame: false, error: 'Ошибка потока' })
+      resolveStreamReady(cameraId, { ok: false, reason: 'error' })
+      void setDemoRecognitionState(cameraId, false, { silent: true })
     },
     onClose: () => {
       delete streamPlayers[cameraId]
       updateStreamState(cameraId, { hasFrame: false })
+      resolveStreamReady(cameraId, { ok: false, reason: 'closed' })
+      void setDemoRecognitionState(cameraId, false, { silent: true })
     },
   })
+
+  const result = await streamReadyPromise
+  window.clearTimeout(readyTimeout)
+  return Boolean(result?.ok)
 }
 
 const stopSingleStream = (cameraId) => {
+  resolveStreamReady(cameraId, { ok: false, reason: 'stopped' })
   if (streamPlayers[cameraId]) {
     streamPlayers[cameraId].close()
     delete streamPlayers[cameraId]
@@ -363,8 +424,15 @@ const stopSingleStream = (cameraId) => {
   removeStreamState(cameraId)
 }
 
-const cleanupAllStreams = () => {
+const cleanupAllStreams = async () => {
+  const activeCameraIds = [...selectedCameraIds.value]
   Object.keys(streamPlayers).forEach((id) => stopSingleStream(Number(id)))
+
+  await Promise.allSettled(
+    activeCameraIds
+      .filter((cameraId) => isDemoCameraId(cameraId))
+      .map((cameraId) => camerasApi.setDemoRecognition(cameraId, { enabled: false }))
+  )
 }
 
 
@@ -458,11 +526,15 @@ onMounted(() => {
   loadEmployees()
   fetchLogs()
   logInterval = setInterval(fetchLogs, 2000)
+  demoRecognitionHeartbeat = setInterval(() => {
+    void refreshSelectedDemoRecognition()
+  }, 3000)
 })
 
 onBeforeUnmount(() => {
   clearInterval(logInterval)
-  cleanupAllStreams()
+  clearInterval(demoRecognitionHeartbeat)
+  void cleanupAllStreams()
 })
 </script>
 

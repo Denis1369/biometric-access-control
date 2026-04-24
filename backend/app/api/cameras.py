@@ -69,6 +69,16 @@ class CameraReadWithNames(CameraRead):
     floor_number: int | None = None
 
 
+class DemoRecognitionUpdate(SQLModel):
+    enabled: bool
+
+
+class DemoRecognitionState(SQLModel):
+    camera_id: int
+    recognition_enabled: bool
+    is_demo_source: bool
+
+
 def _validate_location(
     session: Session,
     building_id: int | None,
@@ -333,6 +343,24 @@ def update_camera(
             detail="Не удалось обновить камеру. Возможно, такой IP уже существует.",
         )
 
+
+
+@router.post(
+    "/{camera_id}/demo-recognition",
+    response_model=DemoRecognitionState,
+    summary="Управление распознаванием демо-камеры",
+    description="Включает или выключает распознавание для локального видеоисточника в рантайме.",
+    dependencies=[Depends(require_roles(*SNAPSHOT_ROLES))],
+)
+def update_demo_recognition(camera_id: int, payload: DemoRecognitionUpdate):
+    state = stream_manager.set_demo_recognition_enabled(camera_id, payload.enabled)
+    if state is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Камера не найдена или поток не запущен",
+        )
+
+    return DemoRecognitionState(**state)
 
 
 @router.get(
