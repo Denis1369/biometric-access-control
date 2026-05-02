@@ -1,20 +1,39 @@
-import numpy as np
+from __future__ import annotations
+
+from dataclasses import dataclass
 from datetime import datetime
+
+import numpy as np
 from sqlmodel import Session, select
 
 from app.models.employee_face_samples import EmployeeFaceSample
 from app.models.employees import Employee
-from app.models.guests import GuestFaceSample, Guest
-from app.services.photo_conversion import extract_face_encoding
+from app.models.guests import Guest, GuestFaceSample
+from app.services.photo_conversion import (
+    extract_face_encoding,
+    extract_face_encoding_with_bbox_from_bgr,
+)
 
 INSIGHTFACE_COSINE_DISTANCE_AUTO_ALLOW = 0.78
 INSIGHTFACE_COSINE_DISTANCE_REVIEW = 0.82
 
+
+@dataclass(frozen=True)
+class FaceRecognitionMatch:
+    person: Employee | Guest | None
+    person_type: str | None
+    distance: float | None
+    decision: str
+    face_bbox: tuple[int, int, int, int] | None = None
+
+
 def cosine_distance(vec_a: np.ndarray, vec_b: np.ndarray) -> float:
     norm_a = np.linalg.norm(vec_a)
     norm_b = np.linalg.norm(vec_b)
-    if norm_a == 0 or norm_b == 0: return 1.0
+    if norm_a == 0 or norm_b == 0:
+        return 1.0
     return float(1.0 - np.dot(vec_a / norm_a, vec_b / norm_b))
+
 
 def _find_best_match_for_vector(vector_a: np.ndarray, session: Session):
     active_emp = set(
@@ -35,9 +54,11 @@ def _find_best_match_for_vector(vector_a: np.ndarray, session: Session):
 
     emp_samples = session.exec(select(EmployeeFaceSample)).all()
     for sample in emp_samples:
-        if sample.employee_id not in active_emp or not sample.embedding: continue
+        if sample.employee_id not in active_emp or not sample.embedding:
+            continue
         vector_b = np.asarray(sample.embedding, dtype=np.float32)
-        if vector_a.shape != vector_b.shape: continue
+        if vector_a.shape != vector_b.shape:
+            continue
         dist = cosine_distance(vector_a, vector_b)
         if dist < best_distance:
             best_distance = dist
@@ -46,9 +67,11 @@ def _find_best_match_for_vector(vector_a: np.ndarray, session: Session):
 
     guest_samples = session.exec(select(GuestFaceSample)).all()
     for sample in guest_samples:
-        if sample.guest_id not in active_guests or not sample.embedding: continue
+        if sample.guest_id not in active_guests or not sample.embedding:
+            continue
         vector_b = np.asarray(sample.embedding, dtype=np.float32)
-        if vector_a.shape != vector_b.shape: continue
+        if vector_a.shape != vector_b.shape:
+            continue
         dist = cosine_distance(vector_a, vector_b)
         if dist < best_distance:
             best_distance = dist
@@ -65,22 +88,76 @@ def _find_best_match_for_vector(vector_a: np.ndarray, session: Session):
 
     return person, best_person_type, best_distance
 
+
+def _build_match(
+    person,
+    person_type: str | None,
+    best_distance: float | None,
+    face_bbox: tuple[int, int, int, int] | None = None,
+) -> FaceRecognitionMatch:
+    if person is None or best_distance is None:
+        return FaceRecognitionMatch(
+            person=None,
+            person_type=None,
+            distance=best_distance,
+            decision="denied",
+            face_bbox=face_bbox,
+        )
+
+    if best_distance <= INSIGHTFACE_COSINE_DISTANCE_AUTO_ALLOW:
+        return FaceRecognitionMatch(
+            person=person,
+            person_type=person_type,
+            distance=best_distance,
+            decision="auto_allow",
+            face_bbox=face_bbox,
+        )
+
+    if best_distance <= INSIGHTFACE_COSINE_DISTANCE_REVIEW:
+        return FaceRecognitionMatch(
+            person=person,
+            person_type=person_type,
+            distance=best_distance,
+            decision="review",
+            face_bbox=face_bbox,
+        )
+
+    return FaceRecognitionMatch(
+        person=None,
+        person_type=None,
+        distance=best_distance,
+        decision="denied",
+        face_bbox=face_bbox,
+    )
+
+
+def find_matching_person_in_frame(
+    frame_bgr: np.ndarray,
+    session: Session,
+) -> FaceRecognitionMatch:
+    try:
+        face_vector, face_bbox = extract_face_encoding_with_bbox_from_bgr(frame_bgr)
+    except ValueError:
+        return FaceRecognitionMatch(
+            person=None,
+            person_type=None,
+            distance=None,
+            decision="denied",
+            face_bbox=None,
+        )
+
+    vector_a = np.asarray(face_vector, dtype=np.float32)
+    person, person_type, best_distance = _find_best_match_for_vector(vector_a, session)
+    return _build_match(person, person_type, best_distance, face_bbox=face_bbox)
+
+
 def find_matching_employee(image_bytes: bytes, session: Session):
     try:
         camera_face_vector = extract_face_encoding(image_bytes)
-    except Exception:
+    except ValueError:
         return None, None, None, "denied"
 
     vector_a = np.asarray(camera_face_vector, dtype=np.float32)
     person, person_type, best_distance = _find_best_match_for_vector(vector_a, session)
-
-    if person is None or best_distance is None:
-        return None, None, best_distance, "denied"
-
-    if best_distance <= INSIGHTFACE_COSINE_DISTANCE_AUTO_ALLOW:
-        return person, person_type, best_distance, "auto_allow"
-
-    if best_distance <= INSIGHTFACE_COSINE_DISTANCE_REVIEW:
-        return person, person_type, best_distance, "review"
-
-    return None, None, best_distance, "denied"
+    match = _build_match(person, person_type, best_distance)
+    return match.person, match.person_type, match.distance, match.decision

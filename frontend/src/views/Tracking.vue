@@ -3,7 +3,7 @@
     <div class="header-panel">
       <div>
         <h1 class="page-title">План здания</h1>
-        <p class="page-subtitle">Выбор здания, этажа, загрузка плана и расстановка камер.</p>
+        <p class="page-subtitle">Выбор здания, этажа, загрузка плана, расстановка камер и маршрут гостей.</p>
       </div>
 
       <div class="top-buttons">
@@ -41,13 +41,18 @@
       </div>
 
       <div class="filter-group wide" v-if="!isEditMode">
-        <label>Журнал</label>
-        <select v-model="selectedEmployeeId" class="form-input">
-          <option value="">Все сотрудники</option>
-          <option v-for="emp in employees" :key="emp.id" :value="String(emp.id)">
-            {{ emp.last_name }} {{ emp.first_name }}
+        <label>Гость</label>
+        <select v-model="selectedGuestId" class="form-input">
+          <option value="">Все гости</option>
+          <option v-for="guest in guests" :key="guest.id" :value="String(guest.id)">
+            {{ buildGuestName(guest) }}
           </option>
         </select>
+      </div>
+
+      <div class="filter-group compact" v-if="!isEditMode">
+        <label>Дата маршрута</label>
+        <input v-model="routeDate" type="date" class="form-input" />
       </div>
 
       <div class="filter-actions">
@@ -108,16 +113,118 @@
             </div>
           </div>
 
+          <svg
+            v-if="mapOverlayVisible"
+            class="map-overlay-layer"
+            viewBox="0 0 100 100"
+            preserveAspectRatio="none"
+            aria-hidden="true"
+          >
+            <template v-if="showPlanAnalysis && planAnalysis">
+              <polygon
+                v-for="(room, index) in analysisRoomsOnMap"
+                :key="`room-${index}`"
+                :points="room.points"
+                class="analysis-room"
+              />
+              <polygon
+                v-for="(corridor, index) in analysisCorridorsOnMap"
+                :key="`corridor-${index}`"
+                :points="corridor.points"
+                class="analysis-corridor"
+              />
+              <line
+                v-for="(wall, index) in analysisWallsOnMap"
+                :key="`wall-${index}`"
+                :x1="wall.x1"
+                :y1="wall.y1"
+                :x2="wall.x2"
+                :y2="wall.y2"
+                class="analysis-wall"
+              />
+              <line
+                v-for="(door, index) in analysisDoorsOnMap"
+                :key="`door-${index}`"
+                :x1="door.x1"
+                :y1="door.y1"
+                :x2="door.x2"
+                :y2="door.y2"
+                class="analysis-door"
+              />
+            </template>
+            <polygon
+              v-for="zone in visibilityZonesOnMap"
+              :key="zone.key"
+              :points="zone.points"
+              :class="['camera-zone', { active: zone.active, editable: isEditMode }]"
+              @mousedown.stop="startZoneDrag(zone.cameraId, $event)"
+            />
+            <path
+              v-for="routePath in routePathsOnMap"
+              :key="routePath.key"
+              :d="routePath.d"
+              class="route-curve-line"
+            />
+          </svg>
+
+          <template v-if="isEditMode && activeCamera?.visibility_polygon">
+            <div
+              v-for="(point, index) in activeCamera.visibility_polygon"
+              :key="`zone-handle-${activeCamera.id}-${index}`"
+              class="zone-handle"
+              :style="zoneHandleStyle(point)"
+              @mousedown.stop="startZoneHandleDrag(activeCamera.id, index, $event)"
+              :title="`Угол зоны видимости #${index + 1}`"
+            >
+              {{ index + 1 }}
+            </div>
+          </template>
+
+          <svg
+            v-if="!isEditMode && topologyEdgesOnMap.length > 0"
+            class="topology-layer"
+            viewBox="0 0 100 100"
+            preserveAspectRatio="none"
+            aria-hidden="true"
+          >
+            <defs>
+              <marker
+                id="topology-arrow"
+                viewBox="0 0 10 10"
+                refX="8"
+                refY="5"
+                markerWidth="4"
+                markerHeight="4"
+                orient="auto-start-reverse"
+              >
+                <path d="M 0 0 L 10 5 L 0 10 z" />
+              </marker>
+            </defs>
+            <line
+              v-for="edge in topologyEdgesOnMap"
+              :key="edge.key"
+              :x1="edge.x1"
+              :y1="edge.y1"
+              :x2="edge.x2"
+              :y2="edge.y2"
+              :class="['topology-edge', edge.className]"
+              marker-end="url(#topology-arrow)"
+            />
+          </svg>
+
           <div
             v-for="camera in mappedCameras"
             :key="camera.id"
-            :class="['camera-pin', { 'active-pin': activeCameraId === camera.id }]"
+            :class="['camera-pin', { 'active-pin': activeCameraId === camera.id, 'route-pin': routeStepByCameraId.has(camera.id) }]"
             :style="cameraStyle(camera)"
             @mousedown.stop="startDrag(camera.id, $event)"
             @click.stop="onCameraClick(camera)"
             :title="camera.name"
           >
             <i class="pi pi-video"></i>
+            <span v-if="routeStepByCameraId.get(camera.id)" class="route-step">
+              {{ routeStepByCameraId.get(camera.id) }}
+            </span>
             <span class="pulse-ring" v-if="!isEditMode && activeCameraId === camera.id"></span>
             <div class="camera-tooltip">{{ camera.name }}</div>
           </div>
@@ -125,25 +232,94 @@
       </div>
 
       <div class="logs-section" v-if="!isEditMode">
-        <h2>Журнал проходов</h2>
+        <div class="route-header">
+          <div>
+            <h2>Маршрут гостя</h2>
+            <p>{{ selectedGuestName || 'Все гости' }}</p>
+          </div>
+          <span class="route-count">{{ currentFloorRoutePoints.length }}</span>
+        </div>
         <div class="logs-list">
-          <div v-for="log in filteredLogs" :key="log.id" class="log-card">
-            <div class="log-time">{{ formatTime(log.timestamp) }}</div>
+          <div v-for="point in currentFloorRoutePoints" :key="point.id" class="log-card route-card">
+            <div class="log-time">{{ formatTime(point.timestamp) }}</div>
             <div class="log-info">
-              <div class="log-name">{{ log.employee_name }}</div>
+              <div class="log-name">{{ point.guest_name }}</div>
               <div class="log-camera">
-                <i class="pi pi-map-marker"></i> {{ log.camera_name }}
+                <i class="pi pi-map-marker"></i> {{ point.camera_name || 'Камера не указана' }}
+              </div>
+              <div class="route-meta">
+                {{ point.floor_name || 'Этаж не указан' }}
+                <span v-if="point.confidence !== null">· {{ formatConfidence(point.confidence) }}</span>
               </div>
             </div>
           </div>
-          <div v-if="filteredLogs.length === 0" class="empty-logs">
-            Событий по выбранному этажу не найдено.
+          <div v-if="currentFloorRoutePoints.length === 0" class="empty-logs">
+            Маршрутных событий по выбранному этажу не найдено.
+          </div>
+        </div>
+
+        <div class="topology-section">
+          <div class="route-header topology-header">
+            <div>
+              <h2>Связи камер</h2>
+              <p>Автоопределение порядка за {{ TOPOLOGY_DAYS }} дней</p>
+            </div>
+            <span class="route-count topology-count">{{ currentFloorTransitions.length }}</span>
+          </div>
+
+          <div class="topology-list">
+            <div
+              v-for="edge in currentFloorTransitions"
+              :key="`${edge.from_camera_id}-${edge.to_camera_id}`"
+              class="transition-card"
+            >
+              <div class="transition-main">
+                <span>{{ edge.from_camera_name }}</span>
+                <i class="pi pi-arrow-right"></i>
+                <span>{{ edge.to_camera_name }}</span>
+              </div>
+              <div class="transition-meta">
+                {{ edge.transition_count }} переходов
+                · {{ edge.unique_person_count }} чел.
+                · медиана {{ formatDuration(edge.median_travel_seconds) }}
+                · {{ formatConfidence(edge.confidence) }}
+              </div>
+            </div>
+            <div v-if="currentFloorTransitions.length === 0" class="empty-topology">
+              Пока мало событий для определения порядка камер.
+            </div>
           </div>
         </div>
       </div>
 
       <div class="editor-sidebar" v-else>
         <h2>Настройка плана</h2>
+
+        <div class="plan-analysis-section">
+          <h3>Анализ плана</h3>
+          <p class="instruction-small">
+            Авторазбор плана подсвечивает стены, помещения, коридоры и возможные двери. Это подсказка, а не замена ручной разметки зон камер.
+          </p>
+          <div class="zone-actions">
+            <button
+              class="btn-secondary btn-sm"
+              @click="loadPlanAnalysis"
+              :disabled="planAnalysisLoading || !currentFloor?.has_plan"
+            >
+              <i class="pi pi-search"></i> {{ planAnalysisLoading ? 'Анализ...' : 'Найти элементы' }}
+            </button>
+            <button class="btn-text btn-sm" @click="showPlanAnalysis = !showPlanAnalysis" :disabled="!planAnalysis">
+              {{ showPlanAnalysis ? 'Скрыть' : 'Показать' }}
+            </button>
+          </div>
+          <div v-if="planAnalysis" class="analysis-stats">
+            {{ planAnalysis.walls?.length || 0 }} стен ·
+            {{ planAnalysis.corridors?.length || 0 }} коридоров ·
+            {{ planAnalysis.rooms?.length || 0 }} комнат ·
+            {{ planAnalysis.doors?.length || 0 }} дверей
+          </div>
+          <hr class="sidebar-divider" />
+        </div>
 
         <div v-if="unassignedCameras.length > 0" class="unassigned-section">
           <h3>Свободные камеры</h3>
@@ -174,6 +350,25 @@
               X: {{ formatPercent(activeCamera.plan_x) }} · Y: {{ formatPercent(activeCamera.plan_y) }}
             </div>
           </div>
+
+          <div class="info-group compact">
+            <label>Зона видимости</label>
+            <div class="cam-value">
+              {{ hasVisibilityPolygon(activeCamera) ? '4 точки размечены' : 'Не размечена' }}
+            </div>
+          </div>
+
+          <div class="zone-editor-actions">
+            <button class="btn-secondary btn-sm" @click="resetActiveCameraZone">
+              <i class="pi pi-vector-square"></i> {{ hasVisibilityPolygon(activeCamera) ? 'Сбросить зону' : 'Создать зону' }}
+            </button>
+            <button class="btn-text btn-sm btn-danger" @click="clearActiveCameraZone" :disabled="!hasVisibilityPolygon(activeCamera)">
+              Очистить
+            </button>
+          </div>
+          <p class="instruction-small">
+            Перетаскивайте углы 4-угольника на плане, чтобы примерно отметить участок, который видит камера.
+          </p>
 
           <button class="btn-text btn-danger remove-btn" @click="removeCameraFromFloor(activeCamera.id)">
             <i class="pi pi-times"></i> Убрать с плана
@@ -291,10 +486,10 @@
 <script setup>
 import { computed, onMounted, ref, watch, onBeforeUnmount, nextTick } from 'vue'
 import { analyticsApi } from '../api/analytics'
-import { employeesApi } from '../api/employees'
 import { camerasApi } from '../api/cameras'
 import { buildingsApi } from '../api/buildings'
 import { floorsApi } from '../api/floors'
+import { guestsApi } from '../api/guests'
 import { buildWsUrl } from '../api/client'
 import { useAuth } from '../services/auth'
 import { createCanvasStreamPlayer } from '../services/liveStream'
@@ -305,9 +500,14 @@ defineOptions({ name: 'TrackingPage' })
 const auth = useAuth()
 const ui = useUi()
 const canEditPlan = computed(() => auth.hasAnyRole('super_admin'))
+const TOPOLOGY_DAYS = 30
 
-const logs = ref([])
-const employees = ref([])
+const routePoints = ref([])
+const cameraTransitions = ref([])
+const planAnalysis = ref(null)
+const showPlanAnalysis = ref(true)
+const planAnalysisLoading = ref(false)
+const guests = ref([])
 const buildings = ref([])
 const floors = ref([])
 const mappedCameras = ref([])
@@ -317,12 +517,14 @@ const camerasToRemoveFromFloor = ref([])
 
 const selectedBuildingId = ref('')
 const selectedFloorId = ref('')
-const selectedEmployeeId = ref('')
+const selectedGuestId = ref('')
 const activeCameraId = ref(null)
 
 const isEditMode = ref(false)
 const mapContainer = ref(null)
 const draggingCameraId = ref(null)
+const draggingZone = ref(null)
+const draggingZoneHandle = ref(null)
 const savingPlan = ref(false)
 const floorsLoading = ref(false)
 const planVersion = ref(Date.now())
@@ -342,6 +544,13 @@ const videoCanvas = ref(null)
 
 let livePlayer = null
 
+const toLocalDateInputValue = (value = new Date()) => {
+  const offsetMs = value.getTimezoneOffset() * 60000
+  return new Date(value.getTime() - offsetMs).toISOString().slice(0, 10)
+}
+
+const routeDate = ref(toLocalDateInputValue())
+
 const selectedBuilding = computed(() => buildings.value.find((item) => String(item.id) === String(selectedBuildingId.value)) || null)
 const currentFloor = computed(() => floors.value.find((item) => String(item.id) === String(selectedFloorId.value)) || null)
 
@@ -360,21 +569,126 @@ const currentPlanUrl = computed(() => {
 })
 
 const activeCamera = computed(() => mappedCameras.value.find((camera) => camera.id === activeCameraId.value) || null)
-const currentFloorCameraNames = computed(() => new Set(mappedCameras.value.map((camera) => camera.name)))
+const selectedGuestName = computed(() => {
+  const guest = guests.value.find((item) => String(item.id) === String(selectedGuestId.value))
+  return guest ? buildGuestName(guest) : ''
+})
 
-const filteredLogs = computed(() => {
-  let result = logs.value
-  if (currentFloorCameraNames.value.size > 0) {
-    result = result.filter((log) => currentFloorCameraNames.value.has(log.camera_name))
-  }
-  if (selectedEmployeeId.value) {
-    const employee = employees.value.find((item) => String(item.id) === String(selectedEmployeeId.value))
-    if (employee) {
-      const fullName = [employee.last_name, employee.first_name, employee.middle_name].filter(Boolean).join(' ')
-      result = result.filter((log) => log.employee_name === fullName)
+const currentFloorRoutePoints = computed(() => {
+  if (!selectedFloorId.value) return routePoints.value
+  return routePoints.value.filter((point) => String(point.floor_id) === String(selectedFloorId.value))
+})
+
+const cameraById = computed(() => new Map(mappedCameras.value.map((camera) => [camera.id, camera])))
+
+const currentFloorTransitions = computed(() => cameraTransitions.value.filter((edge) => {
+  const fromCamera = cameraById.value.get(edge.from_camera_id)
+  const toCamera = cameraById.value.get(edge.to_camera_id)
+  return Boolean(fromCamera && toCamera)
+}))
+
+const visibilityZonesOnMap = computed(() => {
+  return mappedCameras.value
+    .map((camera) => {
+      const polygon = normalizeVisibilityPolygon(camera.visibility_polygon)
+      if (!polygon) return null
+      return {
+        key: `zone-${camera.id}`,
+        cameraId: camera.id,
+        active: activeCameraId.value === camera.id,
+        points: polygon.map((point) => `${point.x * 100},${point.y * 100}`).join(' '),
+      }
+    })
+    .filter(Boolean)
+})
+
+const topologyEdgesOnMap = computed(() => {
+  return currentFloorTransitions.value
+    .map((edge) => {
+      const fromCamera = cameraById.value.get(edge.from_camera_id)
+      const toCamera = cameraById.value.get(edge.to_camera_id)
+      if (!fromCamera || !toCamera) return null
+
+      const fromX = Number(fromCamera.plan_x ?? 0.5) * 100
+      const fromY = Number(fromCamera.plan_y ?? 0.5) * 100
+      const toX = Number(toCamera.plan_x ?? 0.5) * 100
+      const toY = Number(toCamera.plan_y ?? 0.5) * 100
+      const dx = toX - fromX
+      const dy = toY - fromY
+      const length = Math.hypot(dx, dy)
+      if (length < 0.1) return null
+
+      const offset = 3
+      const unitX = dx / length
+      const unitY = dy / length
+
+      return {
+        key: `${edge.from_camera_id}-${edge.to_camera_id}`,
+        x1: fromX + unitX * offset,
+        y1: fromY + unitY * offset,
+        x2: toX - unitX * offset,
+        y2: toY - unitY * offset,
+        className: topologyConfidenceClass(edge.confidence),
+      }
+    })
+    .filter(Boolean)
+})
+
+const routePathsOnMap = computed(() => {
+  const paths = []
+  let currentPoints = []
+  let currentGuestId = null
+
+  const flush = () => {
+    if (currentPoints.length >= 2) {
+      paths.push({
+        key: `route-${paths.length + 1}-${currentGuestId ?? 'guest'}`,
+        d: buildSmoothRoutePath(currentPoints),
+      })
     }
+    currentPoints = []
+    currentGuestId = null
   }
-  return result
+
+  currentFloorRoutePoints.value.forEach((point) => {
+    const x = Number(point.plan_x)
+    const y = Number(point.plan_y)
+    if (Number.isNaN(x) || Number.isNaN(y)) {
+      flush()
+      return
+    }
+    if (currentGuestId !== null && currentGuestId !== point.guest_id) {
+      flush()
+    }
+    currentGuestId = point.guest_id
+    currentPoints.push({ x: x * 100, y: y * 100 })
+  })
+  flush()
+
+  return paths.filter((path) => path.d)
+})
+
+const analysisWallsOnMap = computed(() => normalizeAnalysisLines(planAnalysis.value?.walls))
+const analysisDoorsOnMap = computed(() => normalizeAnalysisLines(planAnalysis.value?.doors))
+const analysisRoomsOnMap = computed(() => normalizeAnalysisPolygons(planAnalysis.value?.rooms))
+const analysisCorridorsOnMap = computed(() => normalizeAnalysisPolygons(planAnalysis.value?.corridors))
+
+const mapOverlayVisible = computed(() => {
+  return (
+    visibilityZonesOnMap.value.length > 0 ||
+    routePathsOnMap.value.length > 0 ||
+    (showPlanAnalysis.value && planAnalysis.value)
+  )
+})
+
+const routeStepByCameraId = computed(() => {
+  const steps = new Map()
+  currentFloorRoutePoints.value.forEach((point, index) => {
+    if (point.camera_id && !steps.has(point.camera_id)) {
+      steps.set(point.camera_id, index + 1)
+    }
+  })
+  return steps
 })
 
 function cameraStyle(camera) {
@@ -387,8 +701,137 @@ function clamp01(value) {
   return Math.max(0, Math.min(1, value))
 }
 
+function normalizeVisibilityPolygon(value) {
+  if (!Array.isArray(value) || value.length !== 4) return null
+  const points = value
+    .map((point) => ({
+      x: clamp01(Number(point?.x)),
+      y: clamp01(Number(point?.y)),
+    }))
+    .filter((point) => !Number.isNaN(point.x) && !Number.isNaN(point.y))
+  return points.length === 4 ? points : null
+}
+
+function hasVisibilityPolygon(camera) {
+  return Boolean(camera && normalizeVisibilityPolygon(camera.visibility_polygon))
+}
+
+function zoneHandleStyle(point) {
+  return {
+    left: `${clamp01(Number(point?.x)) * 100}%`,
+    top: `${clamp01(Number(point?.y)) * 100}%`,
+  }
+}
+
+function buildDefaultVisibilityPolygon(camera) {
+  const x = clamp01(Number(camera?.plan_x ?? 0.5))
+  const y = clamp01(Number(camera?.plan_y ?? 0.5))
+  const nearHalfWidth = 0.045
+  const farHalfWidth = 0.13
+  const nearOffset = 0.035
+  const farOffset = 0.22
+  return [
+    { x: clamp01(x - nearHalfWidth), y: clamp01(y - nearOffset) },
+    { x: clamp01(x + nearHalfWidth), y: clamp01(y - nearOffset) },
+    { x: clamp01(x + farHalfWidth), y: clamp01(y + farOffset) },
+    { x: clamp01(x - farHalfWidth), y: clamp01(y + farOffset) },
+  ]
+}
+
+function normalizeAnalysisLines(value) {
+  return (Array.isArray(value) ? value : [])
+    .map((line) => ({
+      x1: clamp01(Number(line?.x1)) * 100,
+      y1: clamp01(Number(line?.y1)) * 100,
+      x2: clamp01(Number(line?.x2)) * 100,
+      y2: clamp01(Number(line?.y2)) * 100,
+    }))
+    .filter((line) => Object.values(line).every((item) => !Number.isNaN(item)))
+}
+
+function normalizeAnalysisPolygons(value) {
+  return (Array.isArray(value) ? value : [])
+    .map((item) => {
+      const polygon = Array.isArray(item?.polygon) ? item.polygon : []
+      const points = polygon
+        .map((point) => {
+          const x = clamp01(Number(point?.x))
+          const y = clamp01(Number(point?.y))
+          if (Number.isNaN(x) || Number.isNaN(y)) return null
+          return `${x * 100},${y * 100}`
+        })
+        .filter(Boolean)
+      return points.length >= 3 ? { points: points.join(' ') } : null
+    })
+    .filter(Boolean)
+}
+
+function buildSmoothRoutePath(points) {
+  if (!Array.isArray(points) || points.length < 2) return ''
+  const commands = [`M ${points[0].x.toFixed(2)} ${points[0].y.toFixed(2)}`]
+
+  for (let index = 1; index < points.length - 1; index += 1) {
+    const previous = points[index - 1]
+    const current = points[index]
+    const next = points[index + 1]
+    const incoming = Math.hypot(current.x - previous.x, current.y - previous.y)
+    const outgoing = Math.hypot(next.x - current.x, next.y - current.y)
+    const radius = Math.min(4.5, incoming * 0.35, outgoing * 0.35)
+
+    if (radius < 0.5 || incoming < 0.1 || outgoing < 0.1) {
+      commands.push(`L ${current.x.toFixed(2)} ${current.y.toFixed(2)}`)
+      continue
+    }
+
+    const inX = (current.x - previous.x) / incoming
+    const inY = (current.y - previous.y) / incoming
+    const outX = (next.x - current.x) / outgoing
+    const outY = (next.y - current.y) / outgoing
+    const beforeTurn = {
+      x: current.x - inX * radius,
+      y: current.y - inY * radius,
+    }
+    const afterTurn = {
+      x: current.x + outX * radius,
+      y: current.y + outY * radius,
+    }
+
+    commands.push(`L ${beforeTurn.x.toFixed(2)} ${beforeTurn.y.toFixed(2)}`)
+    commands.push(
+      `Q ${current.x.toFixed(2)} ${current.y.toFixed(2)} ${afterTurn.x.toFixed(2)} ${afterTurn.y.toFixed(2)}`
+    )
+  }
+
+  const last = points[points.length - 1]
+  commands.push(`L ${last.x.toFixed(2)} ${last.y.toFixed(2)}`)
+  return commands.join(' ')
+}
+
 function formatPercent(value) {
   return typeof value === 'number' ? `${(value * 100).toFixed(1)}%` : '—'
+}
+
+function formatConfidence(value) {
+  return `${Math.round(Number(value || 0) * 100)}%`
+}
+
+function formatDuration(seconds) {
+  const safeSeconds = Math.max(0, Number(seconds || 0))
+  if (safeSeconds < 60) return `${Math.round(safeSeconds)} с`
+  const minutes = Math.floor(safeSeconds / 60)
+  const restSeconds = Math.round(safeSeconds % 60)
+  return restSeconds > 0 ? `${minutes} мин ${restSeconds} с` : `${minutes} мин`
+}
+
+function topologyConfidenceClass(value) {
+  const confidence = Number(value || 0)
+  if (confidence >= 0.7) return 'strong'
+  if (confidence >= 0.45) return 'medium'
+  return 'weak'
+}
+
+function buildGuestName(guest) {
+  return [guest.last_name, guest.first_name, guest.middle_name].filter(Boolean).join(' ')
 }
 
 function formatTime(isoString) {
@@ -414,6 +857,44 @@ function getMouseNormalized(event) {
 
 function selectCamera(id) {
   activeCameraId.value = id
+}
+
+function startZoneHandleDrag(cameraId, pointIndex, event) {
+  if (!isEditMode.value) return
+  activeCameraId.value = cameraId
+  if (event && typeof event.preventDefault === 'function') {
+    event.preventDefault()
+  }
+  draggingZoneHandle.value = { cameraId, pointIndex }
+}
+
+function startZoneDrag(cameraId, event) {
+  if (!isEditMode.value) return
+  const camera = mappedCameras.value.find((item) => item.id === cameraId)
+  const polygon = normalizeVisibilityPolygon(camera?.visibility_polygon)
+  if (!camera || !polygon) return
+
+  activeCameraId.value = cameraId
+  if (event && typeof event.preventDefault === 'function') {
+    event.preventDefault()
+  }
+  const { x, y } = getMouseNormalized(event)
+  draggingZone.value = {
+    cameraId,
+    startX: x,
+    startY: y,
+    originalPolygon: polygon.map((point) => ({ ...point })),
+  }
+}
+
+function resetActiveCameraZone() {
+  if (!activeCamera.value) return
+  activeCamera.value.visibility_polygon = buildDefaultVisibilityPolygon(activeCamera.value)
+}
+
+function clearActiveCameraZone() {
+  if (!activeCamera.value) return
+  activeCamera.value.visibility_polygon = null
 }
 
 function onCameraClick(camera) {
@@ -480,7 +961,35 @@ function startDrag(id, event) {
 }
 
 function onMapMouseMove(event) {
-  if (!isEditMode.value || !draggingCameraId.value) return
+  if (!isEditMode.value) return
+  if (draggingZoneHandle.value) {
+    const camera = mappedCameras.value.find((item) => item.id === draggingZoneHandle.value.cameraId)
+    const polygon = normalizeVisibilityPolygon(camera?.visibility_polygon)
+    if (!camera || !polygon) return
+    const { x, y } = getMouseNormalized(event)
+    polygon[draggingZoneHandle.value.pointIndex] = { x, y }
+    camera.visibility_polygon = polygon
+    return
+  }
+  if (draggingZone.value) {
+    const camera = mappedCameras.value.find((item) => item.id === draggingZone.value.cameraId)
+    if (!camera) return
+    const { x, y } = getMouseNormalized(event)
+    const originalPolygon = draggingZone.value.originalPolygon
+    const minX = Math.min(...originalPolygon.map((point) => point.x))
+    const maxX = Math.max(...originalPolygon.map((point) => point.x))
+    const minY = Math.min(...originalPolygon.map((point) => point.y))
+    const maxY = Math.max(...originalPolygon.map((point) => point.y))
+    const dx = Math.max(-minX, Math.min(1 - maxX, x - draggingZone.value.startX))
+    const dy = Math.max(-minY, Math.min(1 - maxY, y - draggingZone.value.startY))
+
+    camera.visibility_polygon = originalPolygon.map((point) => ({
+      x: clamp01(point.x + dx),
+      y: clamp01(point.y + dy),
+    }))
+    return
+  }
+  if (!draggingCameraId.value) return
   const camera = mappedCameras.value.find((item) => item.id === draggingCameraId.value)
   if (!camera) return
 
@@ -491,6 +1000,8 @@ function onMapMouseMove(event) {
 
 function onMapMouseUp() {
   draggingCameraId.value = null
+  draggingZone.value = null
+  draggingZoneHandle.value = null
 }
 
 async function loadUnassignedCameras() {
@@ -503,13 +1014,16 @@ async function loadUnassignedCameras() {
 }
 
 function addCameraToFloor(camera) {
-  mappedCameras.value.push({
+  const placedCamera = {
     ...camera,
     plan_x: 0.5,
     plan_y: 0.5,
+    visibility_polygon: null,
     building_id: Number(selectedBuildingId.value),
     floor_id: Number(selectedFloorId.value)
-  })
+  }
+  placedCamera.visibility_polygon = buildDefaultVisibilityPolygon(placedCamera)
+  mappedCameras.value.push(placedCamera)
   unassignedCameras.value = unassignedCameras.value.filter((c) => c.id !== camera.id)
   activeCameraId.value = camera.id
 }
@@ -535,6 +1049,8 @@ async function toggleEditMode() {
   activeCameraId.value = null
   camerasToRemoveFromFloor.value = []
   draggingCameraId.value = null
+  draggingZone.value = null
+  draggingZoneHandle.value = null
   
   await loadUnassignedCameras()
 }
@@ -544,6 +1060,8 @@ function cancelEditMode() {
   isEditMode.value = false
   activeCameraId.value = null
   draggingCameraId.value = null
+  draggingZone.value = null
+  draggingZoneHandle.value = null
   camerasToRemoveFromFloor.value = [] 
   loadFloorContext()
 }
@@ -559,7 +1077,8 @@ async function savePlan() {
         building_id: Number(currentFloor.value?.building_id) || null,
         floor_id: Number(currentFloor.value?.id) || null,
         plan_x: clamp01(typeof camera.plan_x === 'number' ? camera.plan_x : 0.5),
-        plan_y: clamp01(typeof camera.plan_y === 'number' ? camera.plan_y : 0.5)
+        plan_y: clamp01(typeof camera.plan_y === 'number' ? camera.plan_y : 0.5),
+        visibility_polygon: normalizeVisibilityPolygon(camera.visibility_polygon)
       })
     )
 
@@ -568,20 +1087,27 @@ async function savePlan() {
         building_id: null,
         floor_id: null,
         plan_x: null,
-        plan_y: null
+        plan_y: null,
+        visibility_polygon: null
       })
     )
 
-    await Promise.all([...updatePromises, ...removePromises])
+    await Promise.all([
+      ...updatePromises,
+      ...removePromises,
+    ])
 
     isEditMode.value = false
     activeCameraId.value = null
+    draggingZone.value = null
+    draggingZoneHandle.value = null
     camerasToRemoveFromFloor.value = []
     
     await loadFloorContext()
+    await loadGuestRoute()
     await loadUnassignedCameras() 
     
-    ui.success('Положение камер успешно сохранено')
+    ui.success('Положение камер и зоны видимости сохранены')
   } catch (error) {
     console.error("Ошибка сохранения плана:", error.response?.data || error)
     ui.error(ui.getErrorMessage(error, 'Не удалось сохранить позиции камер'))
@@ -596,22 +1122,78 @@ function onPlanImageError(event) {
 
 async function loadInitialData() {
   try {
-    const [logsRes, empRes, buildingsRes] = await Promise.all([
-      analyticsApi.getAccessLogs(100),
-      employeesApi.getEmployees(),
+    const [guestsRes, buildingsRes] = await Promise.all([
+      guestsApi.getGuests(),
       buildingsApi.getBuildings()
     ])
-    logs.value = logsRes.data
-    employees.value = empRes.data
+    guests.value = guestsRes.data
     buildings.value = buildingsRes.data
 
     if (!selectedBuildingId.value && buildings.value.length > 0) {
       selectedBuildingId.value = String(buildings.value[0].id)
     } else if (selectedBuildingId.value) {
       await loadFloorsForBuilding(selectedBuildingId.value)
+      await loadGuestRoute()
     }
   } catch (error) {
     ui.error(ui.getErrorMessage(error, 'Не удалось загрузить данные страницы плана здания'))
+  }
+}
+
+async function loadPlanAnalysis() {
+  if (!selectedFloorId.value || !currentFloor.value?.has_plan) {
+    return ui.warn('Сначала загрузите план этажа')
+  }
+  planAnalysisLoading.value = true
+  try {
+    const response = await floorsApi.analyzePlan(selectedFloorId.value)
+    planAnalysis.value = response.data
+    showPlanAnalysis.value = true
+    ui.success('План проанализирован. Проверьте подсветку и разметьте зоны камер вручную.')
+  } catch (error) {
+    planAnalysis.value = null
+    ui.error(ui.getErrorMessage(error, 'Не удалось проанализировать план этажа'))
+  } finally {
+    planAnalysisLoading.value = false
+  }
+}
+
+async function loadGuestRoute() {
+  try {
+    const response = await analyticsApi.getGuestRoute({
+      guestId: selectedGuestId.value,
+      targetDate: routeDate.value,
+      buildingId: selectedBuildingId.value,
+      limit: 300,
+    })
+    routePoints.value = response.data
+  } catch (error) {
+    routePoints.value = []
+    ui.error(ui.getErrorMessage(error, 'Не удалось загрузить маршрут гостя'))
+  }
+}
+
+async function loadCameraTransitions() {
+  if (!selectedBuildingId.value || !selectedFloorId.value) {
+    cameraTransitions.value = []
+    return
+  }
+
+  try {
+    const response = await analyticsApi.getCameraTransitions({
+      targetDate: routeDate.value,
+      days: TOPOLOGY_DAYS,
+      buildingId: selectedBuildingId.value,
+      floorId: selectedFloorId.value,
+      personType: 'all',
+      maxGapMinutes: 45,
+      minCount: 1,
+      limit: 120,
+    })
+    cameraTransitions.value = response.data
+  } catch (error) {
+    cameraTransitions.value = []
+    ui.error(ui.getErrorMessage(error, 'Не удалось загрузить связи камер'))
   }
 }
 
@@ -636,6 +1218,7 @@ async function loadFloorsForBuilding(buildingId) {
 async function loadFloorContext() {
   if (!selectedBuildingId.value || !selectedFloorId.value) {
     mappedCameras.value = []
+    planAnalysis.value = null
     activeCameraId.value = null
     return
   }
@@ -649,7 +1232,8 @@ async function loadFloorContext() {
     mappedCameras.value = camerasRes.data.map((camera, index) => ({
       ...camera,
       plan_x: typeof camera.plan_x === 'number' && camera.plan_x !== null ? camera.plan_x : distributeFallbackX(index, camerasRes.data.length),
-      plan_y: typeof camera.plan_y === 'number' && camera.plan_y !== null ? camera.plan_y : 0.5
+      plan_y: typeof camera.plan_y === 'number' && camera.plan_y !== null ? camera.plan_y : 0.5,
+      visibility_polygon: normalizeVisibilityPolygon(camera.visibility_polygon)
     }))
     if (!mappedCameras.value.some((item) => item.id === activeCameraId.value)) {
       activeCameraId.value = null
@@ -657,6 +1241,7 @@ async function loadFloorContext() {
     planVersion.value = Date.now()
   } catch (error) {
     mappedCameras.value = []
+    planAnalysis.value = null
     activeCameraId.value = null
     ui.error(ui.getErrorMessage(error, 'Не удалось загрузить данные этажа'))
   }
@@ -784,8 +1369,11 @@ watch(selectedBuildingId, async (newValue) => {
   mappedCameras.value = []
   floors.value = []
   selectedFloorId.value = ''
+  planAnalysis.value = null
   if (!newValue) return
   await loadFloorsForBuilding(newValue)
+  await loadGuestRoute()
+  await loadCameraTransitions()
 })
 
 watch(selectedFloorId, async (newValue) => {
@@ -793,9 +1381,17 @@ watch(selectedFloorId, async (newValue) => {
   activeCameraId.value = null
   if (!newValue) {
     mappedCameras.value = []
+    planAnalysis.value = null
     return
   }
+  planAnalysis.value = null
   await loadFloorContext()
+  await loadCameraTransitions()
+})
+
+watch([selectedGuestId, routeDate], async () => {
+  await loadGuestRoute()
+  await loadCameraTransitions()
 })
 
 onMounted(async () => {
@@ -814,8 +1410,9 @@ onBeforeUnmount(() => {
 .page-title { font-size: 1.5rem; font-weight: 600; color: #0f172a; margin: 0; }
 .page-subtitle { margin: 0.35rem 0 0; color: #64748b; font-size: 0.9rem; }
 .top-buttons, .filter-actions { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
-.filters-row { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) minmax(220px, 1fr) auto; gap: 1rem; padding: 1rem 1.25rem; align-items: end; }
+.filters-row { display: grid; grid-template-columns: minmax(190px, 1fr) minmax(190px, 1fr) minmax(190px, 1fr) minmax(150px, 0.7fr) auto; gap: 1rem; padding: 1rem 1.25rem; align-items: end; }
 .filter-group { display: flex; flex-direction: column; gap: 0.4rem; }
+.filter-group.compact { min-width: 150px; }
 .filter-group label { font-size: 0.85rem; color: #475569; font-weight: 600; }
 .form-input { width: 100%; padding: 0.7rem 0.9rem; border-radius: 8px; border: 1px solid #cbd5e1; background: #f8fafc; font-size: 0.95rem; color: #1e293b; }
 .form-input:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12); background: #ffffff; }
@@ -872,8 +1469,30 @@ onBeforeUnmount(() => {
 .is-editing .camera-pin { cursor: grab; }
 .is-editing .camera-pin:active { cursor: grabbing; }
 .camera-pin.active-pin { background: #10b981; box-shadow: 0 0 0 5px rgba(16, 185, 129, 0.18); }
+.camera-pin.route-pin { background: #f59e0b; box-shadow: 0 0 0 5px rgba(245, 158, 11, 0.2); }
 .camera-tooltip { display: none; position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%); background: #0f172a; color: white; padding: 0.35rem 0.55rem; border-radius: 6px; font-size: 0.75rem; white-space: nowrap; }
 .camera-pin:hover .camera-tooltip { display: block; }
+.route-step { position: absolute; right: -8px; top: -8px; min-width: 18px; height: 18px; padding: 0 0.25rem; border-radius: 999px; background: #ffffff; color: #92400e; border: 1px solid #fbbf24; display: inline-flex; align-items: center; justify-content: center; font-size: 0.68rem; font-weight: 800; line-height: 1; }
+
+.topology-layer { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; }
+.topology-layer marker path { fill: #0f766e; }
+.topology-edge { stroke: #0f766e; stroke-width: 0.75; stroke-linecap: round; opacity: 0.72; vector-effect: non-scaling-stroke; }
+.topology-edge.strong { stroke: #0f766e; opacity: 0.92; stroke-width: 1; }
+.topology-edge.medium { stroke: #f59e0b; opacity: 0.78; }
+.topology-edge.weak { stroke: #94a3b8; opacity: 0.58; stroke-dasharray: 3 2; }
+
+.map-overlay-layer { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; }
+.analysis-wall { stroke: #0f172a; stroke-width: 0.55; stroke-linecap: round; opacity: 0.4; vector-effect: non-scaling-stroke; }
+.analysis-door { stroke: #22c55e; stroke-width: 1.1; stroke-linecap: round; opacity: 0.72; stroke-dasharray: 2 1; vector-effect: non-scaling-stroke; }
+.analysis-room { fill: rgba(59, 130, 246, 0.1); stroke: rgba(37, 99, 235, 0.24); stroke-width: 0.5; vector-effect: non-scaling-stroke; }
+.analysis-corridor { fill: rgba(20, 184, 166, 0.13); stroke: rgba(15, 118, 110, 0.32); stroke-width: 0.65; vector-effect: non-scaling-stroke; }
+.camera-zone { fill: rgba(245, 158, 11, 0.14); stroke: rgba(217, 119, 6, 0.58); stroke-width: 0.85; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.camera-zone.active { fill: rgba(16, 185, 129, 0.18); stroke: rgba(5, 150, 105, 0.9); stroke-width: 1.1; }
+.camera-zone.editable { pointer-events: all; cursor: grab; }
+.camera-zone.editable:active { cursor: grabbing; }
+.route-curve-line { fill: none; stroke: #f97316; stroke-width: 2.35; stroke-linecap: round; stroke-linejoin: round; opacity: 0.96; vector-effect: non-scaling-stroke; filter: drop-shadow(0 1px 2px rgba(124, 45, 18, 0.25)); }
+.zone-handle { position: absolute; z-index: 4; width: 22px; height: 22px; transform: translate(-50%, -50%); border-radius: 999px; background: #ffffff; border: 2px solid #059669; color: #047857; display: flex; align-items: center; justify-content: center; font-size: 0.68rem; font-weight: 800; cursor: grab; box-shadow: 0 3px 9px rgba(15, 23, 42, 0.2); }
+.zone-handle:active { cursor: grabbing; }
 
 .pulse-ring { position: absolute; inset: -2px; border: 2px solid #10b981; border-radius: 50%; animation: pulse 1.5s infinite; }
 @keyframes pulse { 0% { transform: scale(1); opacity: 1; } 100% { transform: scale(2.4); opacity: 0; } }
@@ -888,13 +1507,33 @@ onBeforeUnmount(() => {
   height: 0; 
   padding-right: 0.5rem; 
 }
+.route-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.route-header p { margin: 0.25rem 0 0; color: #64748b; font-size: 0.85rem; }
+.route-count { min-width: 34px; height: 28px; padding: 0 0.6rem; border-radius: 999px; background: #fef3c7; color: #92400e; display: inline-flex; align-items: center; justify-content: center; font-weight: 800; }
 .log-card { display: flex; gap: 1rem; align-items: center; padding: 0.8rem 0.9rem; border-radius: 8px; background: #f8fafc; border: 1px solid #e2e8f0; }
+.route-card { border-left: 4px solid #f59e0b; }
 .log-time { font-family: monospace; font-size: 0.82rem; color: #64748b; min-width: 70px; }
 .log-name { color: #0f172a; font-weight: 600; }
 .log-camera { margin-top: 0.2rem; font-size: 0.82rem; color: #64748b; display: flex; align-items: center; gap: 0.3rem; }
+.route-meta { margin-top: 0.2rem; color: #94a3b8; font-size: 0.78rem; }
 .empty-logs, .empty-selection { margin: auto 0; text-align: center; color: #94a3b8; }
 
+.topology-section { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #e2e8f0; }
+.topology-header h2 { font-size: 1.05rem; }
+.topology-count { background: #ccfbf1; color: #115e59; }
+.topology-list { margin-top: 0.75rem; display: flex; flex-direction: column; gap: 0.55rem; max-height: 230px; overflow-y: auto; padding-right: 0.4rem; }
+.transition-card { padding: 0.75rem 0.85rem; border-radius: 9px; background: #f8fafc; border: 1px solid #dbeafe; border-left: 4px solid #0f766e; }
+.transition-main { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 0.5rem; color: #0f172a; font-size: 0.84rem; font-weight: 700; }
+.transition-main span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.transition-main i { color: #0f766e; font-size: 0.8rem; }
+.transition-meta { margin-top: 0.35rem; color: #64748b; font-size: 0.76rem; line-height: 1.35; }
+.empty-topology { padding: 1rem 0.5rem; text-align: center; color: #94a3b8; font-size: 0.86rem; }
+
 .unassigned-section { margin-bottom: 1.5rem; }
+.plan-analysis-section { margin-top: 1rem; }
+.plan-analysis-section h3 { font-size: 1.05rem; margin: 0 0 0.5rem 0; color: #0f172a; }
+.zone-actions, .zone-editor-actions { display: flex; flex-wrap: wrap; gap: 0.45rem; margin-top: 0.65rem; }
+.analysis-stats { margin-top: 0.7rem; font-size: 0.82rem; color: #64748b; font-weight: 600; }
 .unassigned-section h3 { font-size: 1.05rem; margin: 0 0 0.5rem 0; color: #0f172a; }
 .instruction-small { font-size: 0.82rem; color: #64748b; margin: 0 0 0.75rem 0; line-height: 1.3; }
 .unassigned-list { display: flex; flex-direction: column; gap: 0.5rem; max-height: 220px; overflow-y: auto; padding-right: 0.25rem; }

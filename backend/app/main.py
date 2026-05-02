@@ -3,6 +3,7 @@ import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import inspect
 from sqlmodel import Session, SQLModel
 
 import app.models  # noqa: F401
@@ -35,9 +36,35 @@ logger = logging.getLogger(__name__)
 def create_db_and_tables():
     SQLModel.metadata.create_all(engine)
 
+
+def ensure_runtime_schema_updates():
+    inspector = inspect(engine)
+    guest_columns = {column["name"] for column in inspector.get_columns("guests")}
+    camera_columns = {column["name"] for column in inspector.get_columns("cameras")}
+
+    statements: list[str] = []
+    if "body_embedding" not in guest_columns:
+        statements.append("ALTER TABLE guests ADD COLUMN body_embedding JSON NULL")
+    if "body_embedding_updated_at" not in guest_columns:
+        statements.append(
+            "ALTER TABLE guests ADD COLUMN body_embedding_updated_at DATETIME NULL"
+        )
+    if "visibility_polygon" not in camera_columns:
+        statements.append("ALTER TABLE cameras ADD COLUMN visibility_polygon JSON NULL")
+
+    if not statements:
+        return
+
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.exec_driver_sql(statement)
+
+    logger.info("Применены runtime-обновления схемы для Re-ID и зон видимости камер.")
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     create_db_and_tables()
+    ensure_runtime_schema_updates()
 
     with Session(engine) as session:
         seeded = ensure_demo_data(session)

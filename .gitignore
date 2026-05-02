@@ -23,11 +23,18 @@ env/
 # Папки с тестовыми видео и картинками
 uploads/
 test_videos/
+saivt-softbio/
+SAIVT-SoftBio/
+saivt-softbio.parts/
+saivt-softbio.tar.gz
+colab_io/
 
 # Модели машинного обучения (веса YOLO очень тяжелые)
 *.pt
 *.onnx
 weights/
+models/
+backend/models/
 
 
 # ========================

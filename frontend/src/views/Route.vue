@@ -15,7 +15,18 @@
     <div class="monitoring-layout">
       <div class="video-section">
         <div class="cameras-toolbar">
-          <h3 class="toolbar-title"><i class="pi pi-video"></i> Активные камеры</h3>
+          <div class="toolbar-top">
+            <h3 class="toolbar-title"><i class="pi pi-video"></i> Активные камеры</h3>
+            <button
+              class="btn-secondary sync-btn"
+              :disabled="selectedDemoCameraIds.length === 0 || isSyncStarting"
+              @click="syncRestartSelectedDemoCameras"
+              title="Перезапустить выбранные локальные видео с первого кадра"
+            >
+              <i class="pi" :class="isSyncStarting ? 'pi-spin pi-spinner' : 'pi-refresh'"></i>
+              {{ isSyncStarting ? 'Синхронизация...' : 'Синхронный старт демо' }}
+            </button>
+          </div>
           <div class="camera-checkboxes">
             <label v-for="cam in availableCameras" :key="cam.id" class="cam-checkbox-label">
               <input 
@@ -114,7 +125,7 @@
                 <i class="pi" :class="isTakingSnapshot ? 'pi-spin pi-spinner' : 'pi-camera'"></i> 
                 Сделать снимок (Live)
               </button>
-              <p class="capture-hint">Убедитесь, что лицо гостя четко видно.</p>
+              <p class="capture-hint">Лучше лицо крупно; если лица нет, подойдет полный силуэт для Re-ID.</p>
             </div>
           </div>
 
@@ -216,6 +227,7 @@ const isTakingSnapshot = ref(false)
 const photoPreview = ref(null)
 const employeeDropdownOpen = ref(false)
 const employeeSearchQuery = ref('')
+const isSyncStarting = ref(false)
 const guestForm = ref({
   last_name: '', first_name: '', middle_name: '', employee_id: '', valid_until: '', photoFile: null
 })
@@ -245,6 +257,7 @@ const getCameraName = (id) => {
 
 const isDemoCamera = (camera) => String(camera?.ip_address || '').trim().toLowerCase().startsWith(VIDEO_FILE_PREFIX)
 const isDemoCameraId = (cameraId) => isDemoCamera(availableCameras.value.find((camera) => camera.id === cameraId))
+const selectedDemoCameraIds = computed(() => selectedCameraIds.value.filter((cameraId) => isDemoCameraId(cameraId)))
 
 const getEmployeeFullName = (employee) => [employee.last_name, employee.first_name, employee.middle_name].filter(Boolean).join(' ')
 const selectedEmployeeName = computed(() => {
@@ -353,6 +366,36 @@ const refreshSelectedDemoRecognition = async () => {
   await Promise.allSettled(
     selectedDemoIds.map((cameraId) => camerasApi.setDemoRecognition(cameraId, { enabled: true }))
   )
+}
+
+const syncRestartSelectedDemoCameras = async () => {
+  const cameraIds = [...selectedDemoCameraIds.value]
+  if (cameraIds.length === 0 || isSyncStarting.value) return
+
+  isSyncStarting.value = true
+  try {
+    const readyResults = await Promise.allSettled(cameraIds.map((cameraId) => startSingleStream(cameraId)))
+    const readyCameraIds = cameraIds.filter((_cameraId, index) => readyResults[index]?.value)
+
+    if (readyCameraIds.length === 0) {
+      ui.warn('Нет готовых демо-потоков для синхронного старта')
+      return
+    }
+
+    await Promise.allSettled(
+      readyCameraIds.map((cameraId) => camerasApi.setDemoRecognition(cameraId, { enabled: false }))
+    )
+    await new Promise((resolve) => window.setTimeout(resolve, 250))
+    await Promise.allSettled(
+      readyCameraIds.map((cameraId) => camerasApi.setDemoRecognition(cameraId, { enabled: true }))
+    )
+
+    ui.success(`Синхронный старт демо-камер: ${readyCameraIds.length}`)
+  } catch (error) {
+    ui.error(ui.getErrorMessage(error, 'Не удалось синхронно запустить демо-камеры'))
+  } finally {
+    isSyncStarting.value = false
+  }
 }
 
 const toggleCameraStream = async (cameraId) => {
@@ -499,7 +542,7 @@ const saveGuest = async () => {
     return
   }
   if (!guestForm.value.photoFile) {
-    ui.warn('Сделайте снимок с камеры')
+    ui.warn('Сделайте снимок лица или полного силуэта с камеры')
     return
   }
 
@@ -551,7 +594,9 @@ onBeforeUnmount(() => {
 
 /* ПАНЕЛЬ ВЫБОРА КАМЕР */
 .cameras-toolbar { background: #ffffff; border-radius: 12px; padding: 1rem 1.25rem; margin-bottom: 1.5rem; border: 1px solid #e2e8f0; display: flex; flex-direction: column; gap: 0.75rem;}
+.toolbar-top { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; }
 .toolbar-title { margin: 0; font-size: 1.05rem; color: #0f172a; display: flex; align-items: center; gap: 0.5rem; }
+.sync-btn { padding: 0.5rem 0.8rem; font-size: 0.86rem; }
 .camera-checkboxes { display: flex; flex-wrap: wrap; gap: 1rem; }
 .cam-checkbox-label { display: flex; align-items: center; gap: 0.4rem; cursor: pointer; font-size: 0.95rem; color: #334155; user-select: none;}
 .cam-checkbox-label input { width: 1.1rem; height: 1.1rem; cursor: pointer;}

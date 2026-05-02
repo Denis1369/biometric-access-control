@@ -16,3 +16,8 @@ ultralytics
 deepface
 av
 pillow
+torch
+torchvision
+torchreid
+gdown
+tensorboard

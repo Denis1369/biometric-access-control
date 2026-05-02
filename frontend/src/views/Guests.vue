@@ -51,7 +51,7 @@
           <div class="avatar-container">
             <img v-if="guest.photo_id" :src="guestsApi.getGuestPhotoUrl(guest.photo_id)" alt="Фото гостя" class="avatar-img" />
             <div v-else class="avatar-placeholder">
-              <i class="pi pi-user"></i>
+              <i class="pi" :class="guest.has_body_embedding ? 'pi-id-card' : 'pi-user'"></i>
             </div>
           </div>
 
@@ -66,6 +66,10 @@
             <div class="info-row" :class="{ expired: !isPassValid(guest.valid_until, guest.is_active) }">
               <i class="pi pi-clock"></i>
               <span>До: {{ formatDate(guest.valid_until) }}</span>
+            </div>
+            <div v-if="guest.has_body_embedding" class="info-row reid-row">
+              <i class="pi pi-eye"></i>
+              <span>Re-ID по силуэту активен</span>
             </div>
           </div>
         </div>
@@ -116,6 +120,7 @@
                 <i class="pi pi-upload"></i> Загрузить с ПК
               </button>
               <input type="file" accept="image/*" ref="fileInput" class="hidden-input" @change="onFileSelected" />
+              <p class="capture-hint">Можно использовать фото лица или снимок человека в полный рост для Re-ID.</p>
             </div>
           </div>
 
@@ -403,7 +408,7 @@ const saveGuest = async () => {
     return
   }
   if (!guestForm.value.photoFile) {
-    ui.warn('Сделайте снимок с камеры или загрузите фотографию гостя.')
+    ui.warn('Сделайте снимок с камеры или загрузите фото лица/полного роста гостя.')
     return
   }
 
@@ -490,6 +495,8 @@ onMounted(() => {
 .info-row i { color: #3b82f6; font-size: 1rem; }
 .info-row.expired { color: #ef4444; }
 .info-row.expired i { color: #ef4444; }
+.info-row.reid-row { color: #0f766e; }
+.info-row.reid-row i { color: #0f766e; }
 
 .empty-state { grid-column: 1 / -1; display: flex; flex-direction: column; align-items: center; padding: 4rem 2rem; color: #94a3b8; background: #ffffff; border-radius: 16px; border: 1px dashed #cbd5e1; }
 .empty-icon { font-size: 3rem; margin-bottom: 1rem; color: #cbd5e1; }
@@ -519,6 +526,7 @@ onMounted(() => {
 .full-width-btn { width: 100%; justify-content: center; }
 .upload-btn { border: 1px dashed #cbd5e1; }
 .hidden-input { display: none; }
+.capture-hint { margin: 0; color: #64748b; font-size: 0.8rem; line-height: 1.35; }
 
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; }
 .form-group { display: flex; flex-direction: column; gap: 0.4rem; }

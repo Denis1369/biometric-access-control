@@ -8,13 +8,20 @@ import threading
 import time
 from io import BytesIO
 
+import numpy as np
 from PIL import Image
 from sqlmodel import Session, select
 
+from app.core.config import settings
 from app.core.database import engine
 from app.models.cameras import Camera
-from app.models.logs import AccessLog
-from app.services.recognition_service import find_matching_employee
+from app.models.logs import AccessLog, TrackingLog
+from app.services.recognition_service import find_matching_person_in_frame
+from app.services.reid_service import (
+    detect_person_presence,
+    match_guest_by_body,
+    update_guest_body_embedding_from_frame,
+)
 from app.services.video_readers import BaseFrameReader, create_frame_reader
 
 logger = logging.getLogger(__name__)
@@ -115,7 +122,7 @@ class CameraStreamWorker:
         self.reader_lock = threading.Lock()
 
         self.latest_frame: bytes | None = None
-        self.latest_frame_for_recognition: bytes | None = None
+        self.latest_frame_for_recognition: np.ndarray | None = None
         self.latest_frame_version = 0
         self.frame_lock = threading.Lock()
         self.recognition_frame_lock = threading.Lock()
@@ -123,13 +130,18 @@ class CameraStreamWorker:
         self.last_frame_at = 0.0
         self.cooldowns: dict[str, float] = {}
         self.recognition_interval = 0.75
+        self.access_cooldown_sec = 60.0
+        self.tracking_cooldown_sec = 15.0
         self.demo_recognition_ttl_sec = 8.0
         self.demo_recognition_enabled_until = 0.0
         self.recognition_state_lock = threading.Lock()
+        self.restart_playback_requested = False
         self.stream_target_fps = 10
         self.jpeg_quality = 82
         self.preview_max_width = 1280
         self.preview_max_height = 720
+        self.last_empty_trigger_log_at = 0.0
+        self.trigger_unavailable_logged = False
 
     def start(self):
         self.is_running = True
@@ -215,9 +227,9 @@ class CameraStreamWorker:
             if frame_bytes:
                 self.latest_frame_version += 1
 
-    def _set_recognition_frame(self, frame_bytes: bytes | None):
+    def _set_recognition_frame(self, frame_bgr: np.ndarray | None):
         with self.recognition_frame_lock:
-            self.latest_frame_for_recognition = frame_bytes
+            self.latest_frame_for_recognition = None if frame_bgr is None else frame_bgr.copy()
 
     def is_demo_source(self) -> bool:
         return self.source_config.source_kind == "video_file"
@@ -239,9 +251,11 @@ class CameraStreamWorker:
                 self.demo_recognition_enabled_until = time.time() + self.demo_recognition_ttl_sec
                 if not was_enabled:
                     self.cooldowns.clear()
+                    self.restart_playback_requested = True
             else:
                 self.demo_recognition_enabled_until = 0.0
                 self.cooldowns.clear()
+                self.restart_playback_requested = False
 
         if not enabled:
             self._set_recognition_frame(None)
@@ -270,6 +284,15 @@ class CameraStreamWorker:
 
         while self.is_running:
             try:
+                if self.source_config.should_loop and self.restart_playback_requested:
+                    self.restart_playback_requested = False
+                    self._set_latest_frame(None)
+                    self._set_recognition_frame(None)
+                    self._release_reader()
+                    playback_started_at = None
+                    first_frame_timestamp = None
+                    last_recorded_frame_at = None
+
                 with self.reader_lock:
                     reader = self.reader
 
@@ -332,7 +355,7 @@ class CameraStreamWorker:
                     continue
 
                 self._set_latest_frame(image_bytes)
-                self._set_recognition_frame(image_bytes)
+                self._set_recognition_frame(frame)
                 last_encode_time = current_time
             except Exception:
                 logger.exception("Камера %s: ошибка захвата кадра", self.camera_id)
@@ -349,56 +372,195 @@ class CameraStreamWorker:
                     continue
 
                 with self.recognition_frame_lock:
-                    frame_bytes = self.latest_frame_for_recognition
+                    frame_bgr = self.latest_frame_for_recognition
                     self.latest_frame_for_recognition = None
 
-                if frame_bytes:
-                    self._handle_access(frame_bytes)
+                if frame_bgr is not None:
+                    self._handle_access(frame_bgr)
 
                 time.sleep(self.recognition_interval)
             except Exception:
                 logger.exception("Камера %s: ошибка распознавания", self.camera_id)
                 time.sleep(0.5)
 
-    def _handle_access(self, image_bytes: bytes):
+    def _should_emit_event(self, cooldown_key: str, ttl_sec: float) -> bool:
+        current_time = time.time()
+        last_seen = self.cooldowns.get(cooldown_key, 0.0)
+        if current_time - last_seen <= ttl_sec:
+            return False
+        self.cooldowns[cooldown_key] = current_time
+        return True
+
+    @staticmethod
+    def _match_confidence(distance: float | None) -> float | None:
+        if distance is None:
+            return None
+        return max(0.0, min(1.0, 1.0 - float(distance)))
+
+    def _write_access_log(
+        self,
+        session: Session,
+        *,
+        employee_id: int | None = None,
+        guest_id: int | None = None,
+        status: str,
+        confidence: float | None = None,
+    ) -> None:
+        session.add(
+            AccessLog(
+                employee_id=employee_id,
+                guest_id=guest_id,
+                camera_id=self.camera_id,
+                status=status,
+                confidence=confidence,
+            )
+        )
+
+    def _write_tracking_log(
+        self,
+        session: Session,
+        *,
+        guest_id: int | None = None,
+        employee_id: int | None = None,
+        confidence: float,
+    ) -> None:
+        session.add(
+            TrackingLog(
+                guest_id=guest_id,
+                employee_id=employee_id,
+                camera_id=self.camera_id,
+                confidence=confidence,
+            )
+        )
+
+    def _handle_access(self, frame_bgr: np.ndarray):
+        if settings.analysis_trigger_enabled:
+            with ml_lock:
+                presence_detections = detect_person_presence(frame_bgr)
+            if presence_detections is None:
+                if not self.trigger_unavailable_logged:
+                    self.trigger_unavailable_logged = True
+                    logger.warning(
+                        "Камера %s: YOLO-триггер недоступен, анализ продолжается без фильтра пустых кадров",
+                        self.camera_id,
+                    )
+            elif not presence_detections:
+                current_time = time.time()
+                if (
+                    current_time - self.last_empty_trigger_log_at
+                    >= settings.analysis_trigger_empty_log_interval_sec
+                ):
+                    self.last_empty_trigger_log_at = current_time
+                    logger.debug(
+                        "Камера %s: YOLO не нашел человека, тяжелый анализ пропущен",
+                        self.camera_id,
+                    )
+                return
+
         with Session(engine) as session:
             with ml_lock:
-                person, person_type, distance, decision = find_matching_employee(image_bytes, session)
+                face_match = find_matching_person_in_frame(frame_bgr, session)
 
-            current_time = time.time()
+                tracked_body_match = None
+                if face_match.face_bbox is None and self.direction == "internal":
+                    tracked_body_match = match_guest_by_body(frame_bgr, session)
 
-            if person and decision == "auto_allow":
-                cooldown_key = f"{person_type}_{person.id}"
-                last_seen = self.cooldowns.get(cooldown_key, 0)
-                if current_time - last_seen > 60:
-                    self.cooldowns[cooldown_key] = current_time
-                    log = AccessLog(camera_id=self.camera_id, status="granted")
-                    if person_type == "employee":
-                        log.employee_id = person.id
+                updated_body_detection = None
+                if (
+                    face_match.person is not None
+                    and face_match.person_type == "guest"
+                    and face_match.decision == "auto_allow"
+                    and face_match.face_bbox is not None
+                ):
+                    updated_body_detection = update_guest_body_embedding_from_frame(
+                        session,
+                        face_match.person,
+                        frame_bgr,
+                        face_match.face_bbox,
+                    )
+
+            if face_match.person is not None and face_match.decision == "auto_allow":
+                cooldown_key = f"access_{face_match.person_type}_{face_match.person.id}"
+                if self._should_emit_event(cooldown_key, self.access_cooldown_sec):
+                    confidence = self._match_confidence(face_match.distance)
+                    if face_match.person_type == "employee":
+                        self._write_access_log(
+                            session,
+                            employee_id=face_match.person.id,
+                            status="granted",
+                            confidence=confidence,
+                        )
                     else:
-                        log.guest_id = person.id
-                    session.add(log)
+                        self._write_access_log(
+                            session,
+                            guest_id=face_match.person.id,
+                            status="granted",
+                            confidence=confidence,
+                        )
                     session.commit()
-                    badge = "[ГОСТЬ]" if person_type == "guest" else "[СОТРУДНИК]"
+                    badge = "[ГОСТЬ]" if face_match.person_type == "guest" else "[СОТРУДНИК]"
                     logger.info(
                         "Камера %s: проход %s %s %s",
                         self.camera_id,
                         badge,
-                        person.last_name,
-                        person.first_name,
+                        face_match.person.last_name,
+                        face_match.person.first_name,
                     )
 
-            elif person is None and distance is not None:
-                last_seen = self.cooldowns.get("unknown", 0)
-                if current_time - last_seen > 10:
-                    self.cooldowns["unknown"] = current_time
-                    log = AccessLog(employee_id=None, camera_id=self.camera_id, status="denied")
-                    session.add(log)
+                if (
+                    face_match.person_type == "guest"
+                    and self.direction == "internal"
+                    and self._should_emit_event(
+                        f"tracking_face_guest_{face_match.person.id}",
+                        self.tracking_cooldown_sec,
+                    )
+                ):
+                    confidence = self._match_confidence(face_match.distance) or 0.0
+                    self._write_tracking_log(
+                        session,
+                        guest_id=face_match.person.id,
+                        confidence=confidence,
+                    )
+                    session.commit()
+                    if updated_body_detection is not None:
+                        logger.info(
+                            "Камера %s: обновлен body embedding гостя %s по face-confirmed кадру",
+                            self.camera_id,
+                            face_match.person.id,
+                        )
+
+            elif tracked_body_match is not None:
+                cooldown_key = f"tracking_reid_guest_{tracked_body_match.guest.id}"
+                if self._should_emit_event(cooldown_key, self.tracking_cooldown_sec):
+                    self._write_tracking_log(
+                        session,
+                        guest_id=tracked_body_match.guest.id,
+                        confidence=tracked_body_match.similarity,
+                    )
+                    session.commit()
+                    logger.info(
+                        "Камера %s: guest_id=%s найден по Re-ID (distance=%.3f, bbox=%s)",
+                        self.camera_id,
+                        tracked_body_match.guest.id,
+                        tracked_body_match.distance,
+                        tracked_body_match.detection.bbox,
+                    )
+
+            elif face_match.face_bbox is not None and face_match.distance is not None:
+                if self._should_emit_event("unknown", 10.0):
+                    self._write_access_log(session, status="denied", confidence=None)
                     session.commit()
                     logger.warning(
                         "Камера %s: тревога, обнаружено неизвестное лицо",
                         self.camera_id,
                     )
+
+            if (
+                updated_body_detection is not None
+                and face_match.person is not None
+                and session.is_modified(face_match.person, include_collections=False)
+            ):
+                session.commit()
 
 
 class StreamManager:

@@ -38,6 +38,7 @@ class CameraCreate(SQLModel):
     floor_id: int | None = None
     plan_x: float | None = None
     plan_y: float | None = None
+    visibility_polygon: list[dict[str, float]] | None = None
 
 
 class CameraUpdate(SQLModel):
@@ -49,6 +50,7 @@ class CameraUpdate(SQLModel):
     floor_id: int | None = None
     plan_x: float | None = None
     plan_y: float | None = None
+    visibility_polygon: list[dict[str, float]] | None = None
 
 
 class CameraRead(SQLModel):
@@ -61,6 +63,7 @@ class CameraRead(SQLModel):
     floor_id: int | None = None
     plan_x: float | None = None
     plan_y: float | None = None
+    visibility_polygon: list[dict[str, float]] | None = None
 
 
 class CameraReadWithNames(CameraRead):
@@ -120,6 +123,40 @@ def _validate_ratio(value: float | None, field_name: str):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"{field_name} должен быть в диапазоне от 0 до 1",
         )
+
+
+def _normalize_visibility_polygon(
+    value: list[dict[str, float]] | None,
+) -> list[dict[str, float]] | None:
+    if value is None:
+        return None
+    if not isinstance(value, list) or len(value) != 4:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Зона видимости камеры должна содержать ровно 4 точки",
+        )
+
+    points: list[dict[str, float]] = []
+    for index, raw_point in enumerate(value, start=1):
+        if not isinstance(raw_point, dict):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Точка зоны видимости #{index} должна быть объектом",
+            )
+        try:
+            x = float(raw_point.get("x"))
+            y = float(raw_point.get("y"))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Точка зоны видимости #{index} должна содержать числовые x и y",
+            ) from exc
+
+        _validate_ratio(x, f"visibility_polygon[{index}].x")
+        _validate_ratio(y, f"visibility_polygon[{index}].y")
+        points.append({"x": x, "y": y})
+
+    return points
 
 
 def _normalize_non_empty(value: str, field_name: str) -> str:
@@ -182,6 +219,7 @@ def get_cameras(
                 floor_id=camera.floor_id,
                 plan_x=camera.plan_x,
                 plan_y=camera.plan_y,
+                visibility_polygon=camera.visibility_polygon,
                 building_name=building.name if building else None,
                 floor_name=floor.name if floor else None,
                 floor_number=floor.floor_number if floor else None,
@@ -222,6 +260,7 @@ def get_camera(camera_id: int, session: Session = Depends(get_session)):
         floor_id=camera.floor_id,
         plan_x=camera.plan_x,
         plan_y=camera.plan_y,
+        visibility_polygon=camera.visibility_polygon,
         building_name=building.name if building else None,
         floor_name=floor.name if floor else None,
         floor_number=floor.floor_number if floor else None,
@@ -240,6 +279,7 @@ def create_camera(payload: CameraCreate, session: Session = Depends(get_session)
     building_id, floor_id = _validate_location(session, payload.building_id, payload.floor_id)
     _validate_ratio(payload.plan_x, "plan_x")
     _validate_ratio(payload.plan_y, "plan_y")
+    visibility_polygon = _normalize_visibility_polygon(payload.visibility_polygon)
 
     camera = Camera(
         name=_normalize_non_empty(payload.name, "name"),
@@ -250,6 +290,7 @@ def create_camera(payload: CameraCreate, session: Session = Depends(get_session)
         floor_id=floor_id,
         plan_x=payload.plan_x,
         plan_y=payload.plan_y,
+        visibility_polygon=visibility_polygon,
     )
 
     try:
@@ -306,6 +347,8 @@ def update_camera(
         if key in ["plan_x", "plan_y"]:
             _validate_ratio(value, key)
             setattr(camera, key, value)
+        elif key == "visibility_polygon":
+            camera.visibility_polygon = _normalize_visibility_polygon(value)
         elif key in ["name", "ip_address"]:
             if value is None:
                 raise HTTPException(

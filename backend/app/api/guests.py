@@ -11,6 +11,7 @@ from app.models.employees import Employee
 from app.models.guests import Guest, GuestFaceSample
 from app.models.user import UserRole
 from app.services.photo_conversion import extract_face_encoding
+from app.services.reid_service import extract_primary_body_embedding_from_image_bytes
 
 router = APIRouter(prefix="/api/guests", tags=["Гости"])
 logger = logging.getLogger(__name__)
@@ -47,6 +48,8 @@ class GuestRead(SQLModel):
     valid_until: datetime
     is_active: bool
     photo_id: int | None = None
+    has_body_embedding: bool = False
+    body_embedding_updated_at: datetime | None = None
 
 
 def build_employee_name(employee: Employee | None) -> str | None:
@@ -65,6 +68,7 @@ def build_guest_read(session: Session, guest: Guest) -> GuestRead:
         **guest.model_dump(),
         employee_name=build_employee_name(employee),
         photo_id=sample.id if sample else None,
+        has_body_embedding=bool(guest.body_embedding),
     )
 
 
@@ -126,15 +130,30 @@ async def create_guest(
         try:
             face_vector = extract_face_encoding(image_bytes)
         except ValueError:
-            raise HTTPException(status_code=400, detail="Не удалось распознать лицо на фото")
+            face_vector = None
 
-        sample = GuestFaceSample(
-            guest_id=guest.id,
-            mime_type=photo.content_type or "image/jpeg",
-            photo_data=image_bytes,
-            embedding=face_vector,
-        )
-        session.add(sample)
+        if face_vector is not None:
+            sample = GuestFaceSample(
+                guest_id=guest.id,
+                mime_type=photo.content_type or "image/jpeg",
+                photo_data=image_bytes,
+                embedding=face_vector,
+            )
+            session.add(sample)
+        else:
+            body_vector = extract_primary_body_embedding_from_image_bytes(image_bytes)
+            if body_vector is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Не удалось распознать лицо или полный силуэт на фото. "
+                        "Для Re-ID загрузите снимок человека в полный рост."
+                    ),
+                )
+            guest.body_embedding = body_vector
+            guest.body_embedding_updated_at = datetime.now()
+            session.add(guest)
+
         session.commit()
         session.refresh(guest)
 

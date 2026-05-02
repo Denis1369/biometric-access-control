@@ -17,6 +17,13 @@ def _split_csv(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def _resolve_backend_path(value: str) -> Path:
+    path = Path(value).expanduser()
+    if path.is_absolute():
+        return path
+    return BACKEND_ROOT / path
+
+
 @dataclass(frozen=True)
 class Settings:
     database_url_override: str = os.getenv("DATABASE_URL", "").strip()
@@ -36,6 +43,37 @@ class Settings:
     ).strip()
     log_level: str = os.getenv("LOG_LEVEL", "INFO").strip().upper()
     ml_thread_count: int = int(os.getenv("ML_THREAD_COUNT", "4"))
+    models_dir: str = os.getenv("MODELS_DIR", "models").strip()
+    reid_enabled: bool = os.getenv("REID_ENABLED", "true").strip().lower() == "true"
+    reid_detector_weights: str = os.getenv(
+        "REID_DETECTOR_WEIGHTS",
+        "yolo26n-pose.pt",
+    ).strip()
+    reid_detector_url: str = os.getenv(
+        "REID_DETECTOR_URL",
+        "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26n-pose.pt",
+    ).strip()
+    reid_model_name: str = os.getenv("REID_MODEL_NAME", "osnet_x1_0").strip()
+    reid_model_path: str = os.getenv("REID_MODEL_PATH", "").strip()
+    reid_model_url: str = os.getenv("REID_MODEL_URL", "").strip()
+    reid_torch_cache_dir: str = os.getenv("REID_TORCH_CACHE_DIR", "").strip()
+    reid_device: str = os.getenv("REID_DEVICE", "auto").strip().lower()
+    reid_person_confidence: float = float(os.getenv("REID_PERSON_CONFIDENCE", "0.35"))
+    reid_match_distance: float = float(os.getenv("REID_MATCH_DISTANCE", "0.42"))
+    reid_min_crop_width: int = int(os.getenv("REID_MIN_CROP_WIDTH", "48"))
+    reid_min_crop_height: int = int(os.getenv("REID_MIN_CROP_HEIGHT", "96"))
+    reid_min_area_ratio: float = float(os.getenv("REID_MIN_AREA_RATIO", "0.015"))
+    reid_blur_threshold: float = float(os.getenv("REID_BLUR_THRESHOLD", "30.0"))
+    reid_update_alpha: float = float(os.getenv("REID_UPDATE_ALPHA", "0.65"))
+    analysis_trigger_enabled: bool = (
+        os.getenv("ANALYSIS_TRIGGER_ENABLED", "true").strip().lower() == "true"
+    )
+    analysis_trigger_person_confidence: float = float(
+        os.getenv("ANALYSIS_TRIGGER_PERSON_CONFIDENCE", "0.28")
+    )
+    analysis_trigger_empty_log_interval_sec: float = float(
+        os.getenv("ANALYSIS_TRIGGER_EMPTY_LOG_INTERVAL_SEC", "30.0")
+    )
 
     @property
     def database_url(self) -> str:
@@ -68,6 +106,16 @@ class Settings:
     @property
     def cors_allow_origins(self) -> list[str]:
         return _split_csv(self.cors_allow_origins_raw)
+
+    @property
+    def models_path(self) -> Path:
+        return _resolve_backend_path(self.models_dir).resolve()
+
+    @property
+    def reid_torch_cache_path(self) -> Path:
+        if self.reid_torch_cache_dir:
+            return _resolve_backend_path(self.reid_torch_cache_dir).resolve()
+        return (self.models_path / "torch").resolve()
 
 
 settings = Settings()
