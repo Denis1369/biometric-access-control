@@ -17,6 +17,7 @@ from app.api import (
     floors,
     guests,
     job_positions,
+    route_graph,
     users,
     video_analysis,
     websockets,
@@ -40,7 +41,6 @@ def create_db_and_tables():
 def ensure_runtime_schema_updates():
     inspector = inspect(engine)
     guest_columns = {column["name"] for column in inspector.get_columns("guests")}
-    camera_columns = {column["name"] for column in inspector.get_columns("cameras")}
 
     statements: list[str] = []
     if "body_embedding" not in guest_columns:
@@ -49,8 +49,6 @@ def ensure_runtime_schema_updates():
         statements.append(
             "ALTER TABLE guests ADD COLUMN body_embedding_updated_at DATETIME NULL"
         )
-    if "visibility_polygon" not in camera_columns:
-        statements.append("ALTER TABLE cameras ADD COLUMN visibility_polygon JSON NULL")
 
     if not statements:
         return
@@ -59,7 +57,7 @@ def ensure_runtime_schema_updates():
         for statement in statements:
             connection.exec_driver_sql(statement)
 
-    logger.info("Применены runtime-обновления схемы для Re-ID и зон видимости камер.")
+    logger.info("Применены runtime-обновления схемы для Re-ID.")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -102,6 +100,7 @@ app.include_router(websockets.router)
 app.include_router(analytics.router)
 app.include_router(buildings.router)
 app.include_router(floors.router)
+app.include_router(route_graph.router)
 app.include_router(guests.router)
 app.include_router(users.router)
 app.include_router(video_analysis.router)

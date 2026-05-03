@@ -10,7 +10,6 @@ from app.core.deps import require_roles
 from app.models.buildings import Building
 from app.models.floors import Floor
 from app.models.user import UserRole
-from app.services.floor_plan_analysis_service import analyze_floor_plan_image
 
 router = APIRouter(prefix="/api/floors", tags=["Этажи"])
 
@@ -133,34 +132,6 @@ def get_floor_plan(floor_id: int, session: Session = Depends(get_session)):
     return Response(content=floor.plan_image, media_type=floor.plan_mime_type or "image/png")
 
 
-@router.get(
-    "/{floor_id}/plan-analysis",
-    summary="Проанализировать план этажа",
-    description="Возвращает эвристически найденные стены, коридоры, комнаты и кандидаты дверей.",
-    dependencies=[Depends(require_roles(*READ_ROLES))],
-)
-def get_floor_plan_analysis(floor_id: int, session: Session = Depends(get_session)):
-    floor = session.get(Floor, floor_id)
-    if not floor:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Этаж не найден",
-        )
-    if not floor.plan_image:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="План этажа не загружен",
-        )
-
-    try:
-        return analyze_floor_plan_image(floor.plan_image)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
-        ) from exc
-
-
 @router.post(
     "/",
     response_model=FloorRead,
@@ -281,4 +252,3 @@ async def update_floor(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Не удалось обновить этаж",
         )
-

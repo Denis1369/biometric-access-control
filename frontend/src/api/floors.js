@@ -33,8 +33,4 @@ export const floorsApi = {
       }
     })
   },
-
-  analyzePlan(id) {
-    return apiClient.get(`/floors/${id}/plan-analysis`)
-  },
 }

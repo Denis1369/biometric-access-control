@@ -1,5 +1,3 @@
-from sqlalchemy import Column
-from sqlalchemy.dialects.mysql import JSON
 from sqlmodel import Field, SQLModel
 
 
@@ -16,9 +14,5 @@ class Camera(SQLModel, table=True):
 
     plan_x: float | None = Field(default=None)
     plan_y: float | None = Field(default=None)
-    visibility_polygon: list[dict[str, float]] | None = Field(
-        default=None,
-        sa_column=Column(JSON, nullable=True),
-    )
 
     direction: str = Field(default="in")

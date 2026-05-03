@@ -1,22 +1,19 @@
 from calendar import monthrange
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from sqlmodel import Session, func, select
 
 from app.core.database import get_session
 from app.core.deps import require_roles
 from app.models.cameras import Camera
-from app.models.buildings import Building
 from app.models.departments import Department
 from app.models.employees import Employee
-from app.models.floors import Floor
 from app.models.guests import Guest
 from app.models.logs import AccessLog, TrackingLog
 from app.models.user import UserRole
-from app.services.camera_topology_service import infer_camera_transitions
 
 router = APIRouter(prefix="/api/analytics", tags=["Аналитика и Журналы"])
 
@@ -44,43 +41,6 @@ class TrackingLogResponse(BaseModel):
     confidence: float
     employee_name: str | None
     camera_name: str | None
-
-
-class RoutePathPointResponse(BaseModel):
-    x: float
-    y: float
-
-
-class GuestRoutePointResponse(BaseModel):
-    id: int
-    timestamp: datetime
-    guest_id: int
-    guest_name: str
-    camera_id: int | None
-    camera_name: str | None
-    building_id: int | None
-    building_name: str | None
-    floor_id: int | None
-    floor_name: str | None
-    floor_number: int | None
-    plan_x: float | None
-    plan_y: float | None
-    path_to_next: list[RoutePathPointResponse] = Field(default_factory=list)
-    confidence: float
-
-
-class CameraTransitionResponse(BaseModel):
-    from_camera_id: int
-    from_camera_name: str
-    to_camera_id: int
-    to_camera_name: str
-    transition_count: int
-    unique_person_count: int
-    avg_travel_seconds: float
-    median_travel_seconds: float
-    min_travel_seconds: float
-    max_travel_seconds: float
-    confidence: float
 
 
 class DashboardStatsResponse(BaseModel):
@@ -112,35 +72,6 @@ def _build_person_name(employee: Employee | None, guest: Guest | None) -> str:
     if guest:
         return f"[Гость] {guest.last_name} {guest.first_name}"
     return "Неизвестное лицо"
-
-
-def _clamp01(value: float | None) -> float | None:
-    if value is None:
-        return None
-    return max(0.0, min(1.0, float(value)))
-
-
-def _camera_route_anchor(camera: Camera | None) -> tuple[float | None, float | None]:
-    if camera is None:
-        return None, None
-
-    polygon = camera.visibility_polygon if isinstance(camera.visibility_polygon, list) else None
-    if polygon and len(polygon) >= 3:
-        points: list[tuple[float, float]] = []
-        for raw_point in polygon:
-            if not isinstance(raw_point, dict):
-                continue
-            x = _clamp01(raw_point.get("x"))
-            y = _clamp01(raw_point.get("y"))
-            if x is not None and y is not None:
-                points.append((x, y))
-        if len(points) >= 3:
-            return (
-                sum(point[0] for point in points) / len(points),
-                sum(point[1] for point in points) / len(points),
-            )
-
-    return _clamp01(camera.plan_x), _clamp01(camera.plan_y)
 
 
 @router.get(
@@ -204,139 +135,6 @@ def get_tracking_logs(session: Session = Depends(get_session), skip: int = 0, li
             )
         )
     return response_data
-
-
-@router.get(
-    "/guest-route",
-    response_model=List[GuestRoutePointResponse],
-    dependencies=[Depends(require_roles(*BASIC_ANALYTICS_ROLES))],
-)
-def get_guest_route(
-    guest_id: int | None = None,
-    target_date: str | None = None,
-    building_id: int | None = None,
-    floor_id: int | None = None,
-    limit: int = 200,
-    session: Session = Depends(get_session),
-):
-    query_date = _parse_target_date(target_date)
-    start_of_day = datetime.combine(query_date, datetime.min.time())
-    end_of_day = datetime.combine(query_date, datetime.max.time())
-
-    statement = (
-        select(TrackingLog, Guest, Camera, Building, Floor)
-        .join(Guest, TrackingLog.guest_id == Guest.id)
-        .join(Camera, TrackingLog.camera_id == Camera.id, isouter=True)
-        .join(Building, Camera.building_id == Building.id, isouter=True)
-        .join(Floor, Camera.floor_id == Floor.id, isouter=True)
-        .where(TrackingLog.timestamp >= start_of_day)
-        .where(TrackingLog.timestamp <= end_of_day)
-        .order_by(TrackingLog.timestamp.asc())
-        .limit(min(max(limit, 1), 500))
-    )
-
-    if guest_id is not None:
-        statement = statement.where(TrackingLog.guest_id == guest_id)
-    if building_id is not None:
-        statement = statement.where(Camera.building_id == building_id)
-    if floor_id is not None:
-        statement = statement.where(Camera.floor_id == floor_id)
-
-    rows = session.exec(statement).all()
-    result_items: list[dict] = []
-    for tracking_log, guest, camera, building, floor in rows:
-        anchor_x, anchor_y = _camera_route_anchor(camera)
-        result_items.append(
-            {
-                "id": tracking_log.id,
-                "timestamp": tracking_log.timestamp,
-                "guest_id": guest.id,
-                "guest_name": f"{guest.last_name} {guest.first_name}",
-                "camera_id": camera.id if camera else None,
-                "camera_name": camera.name if camera else None,
-                "building_id": building.id if building else None,
-                "building_name": building.name if building else None,
-                "floor_id": floor.id if floor else None,
-                "floor_name": floor.name if floor else None,
-                "floor_number": floor.floor_number if floor else None,
-                "plan_x": anchor_x,
-                "plan_y": anchor_y,
-                "path_to_next": [],
-                "confidence": tracking_log.confidence,
-            }
-        )
-
-    for index, current_item in enumerate(result_items[:-1]):
-        next_item = result_items[index + 1]
-        same_guest = current_item["guest_id"] == next_item["guest_id"]
-        same_floor = (
-            current_item["floor_id"] is not None
-            and current_item["floor_id"] == next_item["floor_id"]
-        )
-        if not same_guest or not same_floor:
-            continue
-
-        if (
-            current_item["plan_x"] is not None
-            and current_item["plan_y"] is not None
-            and next_item["plan_x"] is not None
-            and next_item["plan_y"] is not None
-        ):
-            current_item["path_to_next"] = [
-                {"x": current_item["plan_x"], "y": current_item["plan_y"]},
-                {"x": next_item["plan_x"], "y": next_item["plan_y"]},
-            ]
-
-    return [GuestRoutePointResponse(**item) for item in result_items]
-
-
-@router.get(
-    "/camera-transitions",
-    response_model=List[CameraTransitionResponse],
-    dependencies=[Depends(require_roles(*BASIC_ANALYTICS_ROLES))],
-)
-def get_camera_transitions(
-    target_date: str | None = None,
-    days: int = 30,
-    building_id: int | None = None,
-    floor_id: int | None = None,
-    person_type: str = "all",
-    max_gap_minutes: int = 30,
-    min_count: int = 1,
-    limit: int = 100,
-    session: Session = Depends(get_session),
-):
-    if person_type not in {"all", "employee", "guest"}:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Параметр person_type должен быть all, employee или guest",
-        )
-
-    query_date = _parse_target_date(target_date)
-    safe_days = min(max(days, 1), 365)
-    safe_gap_minutes = min(max(max_gap_minutes, 1), 24 * 60)
-    safe_min_count = min(max(min_count, 1), 1000)
-    safe_limit = min(max(limit, 1), 500)
-
-    start_at = datetime.combine(
-        query_date - timedelta(days=safe_days - 1),
-        datetime.min.time(),
-    )
-    end_at = datetime.combine(query_date, datetime.max.time())
-
-    transitions = infer_camera_transitions(
-        session,
-        start_at=start_at,
-        end_at=end_at,
-        person_type=person_type,  # type: ignore[arg-type]
-        building_id=building_id,
-        floor_id=floor_id,
-        max_transition_gap=timedelta(minutes=safe_gap_minutes),
-        min_transition_count=safe_min_count,
-        limit=safe_limit,
-    )
-
-    return [CameraTransitionResponse(**transition.__dict__) for transition in transitions]
 
 
 @router.get(

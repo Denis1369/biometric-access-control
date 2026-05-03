@@ -33,7 +33,7 @@ colab_io/
 *.pt
 *.onnx
 weights/
-models/
+/models/
 backend/models/
 
 

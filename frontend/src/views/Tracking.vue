@@ -3,7 +3,7 @@
     <div class="header-panel">
       <div>
         <h1 class="page-title">План здания</h1>
-        <p class="page-subtitle">Выбор здания, этажа, загрузка плана, расстановка камер и маршрут гостей.</p>
+        <p class="page-subtitle">Выбор здания, этажа, загрузка плана, расстановка камер и ручная разметка маршрутов.</p>
       </div>
 
       <div class="top-buttons">
@@ -40,21 +40,6 @@
         </select>
       </div>
 
-      <div class="filter-group wide" v-if="!isEditMode">
-        <label>Гость</label>
-        <select v-model="selectedGuestId" class="form-input">
-          <option value="">Все гости</option>
-          <option v-for="guest in guests" :key="guest.id" :value="String(guest.id)">
-            {{ buildGuestName(guest) }}
-          </option>
-        </select>
-      </div>
-
-      <div class="filter-group compact" v-if="!isEditMode">
-        <label>Дата маршрута</label>
-        <input v-model="routeDate" type="date" class="form-input" />
-      </div>
-
       <div class="filter-actions">
         <button
           v-if="canEditPlan && !isEditMode"
@@ -65,10 +50,8 @@
           <i class="pi pi-pencil"></i> Редактировать камеры
         </button>
 
-        <template v-else>
-          <button class="btn-text" @click="cancelEditMode">
-            Отмена
-          </button>
+        <template v-else-if="isEditMode">
+          <button class="btn-text" @click="cancelEditMode">Отмена</button>
           <button class="btn-success" @click="savePlan" :disabled="savingPlan || !selectedFloorId">
             <i class="pi pi-check"></i> {{ savingPlan ? 'Сохранение...' : 'Сохранить' }}
           </button>
@@ -88,6 +71,40 @@
           </span>
         </div>
 
+        <div class="route-toolbar">
+          <button
+            v-if="canEditPlan"
+            class="mode-button"
+            :class="{ active: graphMode === 'markup' }"
+            :disabled="!routeGraphAvailable || isEditMode || routeGraphLoading"
+            @click="setGraphMode('markup')"
+          >
+            Режим разметки
+          </button>
+          <button
+            class="mode-button"
+            :class="{ active: graphMode === 'path' }"
+            :disabled="!routeGraphAvailable || isEditMode || routeGraphLoading"
+            @click="setGraphMode('path')"
+          >
+            Режим маршрута
+          </button>
+          <button class="btn-text btn-compact" :disabled="!routePathNodes.length" @click="clearRoutePath">
+            Очистить маршрут
+          </button>
+          <button
+            v-if="canEditPlan"
+            class="btn-text btn-danger btn-compact"
+            :disabled="!routeNodes.length && !routeEdges.length"
+            @click="confirmClearRouteGraph"
+          >
+            Очистить граф
+          </button>
+          <span class="graph-counter">
+            {{ routeGraphLoading ? 'Загрузка графа...' : `Точек: ${routeNodes.length} · Линий: ${routeEdges.length}` }}
+          </span>
+        </div>
+
         <div
           class="map-container"
           ref="mapContainer"
@@ -98,10 +115,12 @@
         >
           <img
             v-if="selectedFloorId && currentFloor?.has_plan"
+            ref="planImage"
             :src="currentPlanUrl"
             alt="План этажа"
             class="building-plan"
             draggable="false"
+            @load="onPlanImageLoad"
             @error="onPlanImageError"
           />
 
@@ -114,117 +133,83 @@
           </div>
 
           <svg
-            v-if="mapOverlayVisible"
-            class="map-overlay-layer"
-            viewBox="0 0 100 100"
+            v-if="routeGraphAvailable"
+            ref="routeSvg"
+            class="route-graph-layer"
+            :class="{ 'is-path-mode': graphMode === 'path', 'is-markup-mode': graphMode === 'markup' && canEditPlan }"
+            :style="planOverlayStyle"
+            :viewBox="routeSvgViewBox"
             preserveAspectRatio="none"
-            aria-hidden="true"
+            @pointerdown.self="onRouteSvgPointerDown"
+            @pointermove="onRouteSvgPointerMove"
+            @pointerup="onRouteSvgPointerUp"
+            @pointerleave="cancelDraftRouteEdge"
+            @contextmenu.prevent
           >
-            <template v-if="showPlanAnalysis && planAnalysis">
-              <polygon
-                v-for="(room, index) in analysisRoomsOnMap"
-                :key="`room-${index}`"
-                :points="room.points"
-                class="analysis-room"
-              />
-              <polygon
-                v-for="(corridor, index) in analysisCorridorsOnMap"
-                :key="`corridor-${index}`"
-                :points="corridor.points"
-                class="analysis-corridor"
-              />
-              <line
-                v-for="(wall, index) in analysisWallsOnMap"
-                :key="`wall-${index}`"
-                :x1="wall.x1"
-                :y1="wall.y1"
-                :x2="wall.x2"
-                :y2="wall.y2"
-                class="analysis-wall"
-              />
-              <line
-                v-for="(door, index) in analysisDoorsOnMap"
-                :key="`door-${index}`"
-                :x1="door.x1"
-                :y1="door.y1"
-                :x2="door.x2"
-                :y2="door.y2"
-                class="analysis-door"
-              />
-            </template>
-            <polygon
-              v-for="zone in visibilityZonesOnMap"
-              :key="zone.key"
-              :points="zone.points"
-              :class="['camera-zone', { active: zone.active, editable: isEditMode }]"
-              @mousedown.stop="startZoneDrag(zone.cameraId, $event)"
-            />
-            <path
-              v-for="routePath in routePathsOnMap"
-              :key="routePath.key"
-              :d="routePath.d"
-              class="route-curve-line"
-            />
-          </svg>
-
-          <template v-if="isEditMode && activeCamera?.visibility_polygon">
-            <div
-              v-for="(point, index) in activeCamera.visibility_polygon"
-              :key="`zone-handle-${activeCamera.id}-${index}`"
-              class="zone-handle"
-              :style="zoneHandleStyle(point)"
-              @mousedown.stop="startZoneHandleDrag(activeCamera.id, index, $event)"
-              :title="`Угол зоны видимости #${index + 1}`"
-            >
-              {{ index + 1 }}
-            </div>
-          </template>
-
-          <svg
-            v-if="!isEditMode && topologyEdgesOnMap.length > 0"
-            class="topology-layer"
-            viewBox="0 0 100 100"
-            preserveAspectRatio="none"
-            aria-hidden="true"
-          >
-            <defs>
-              <marker
-                id="topology-arrow"
-                viewBox="0 0 10 10"
-                refX="8"
-                refY="5"
-                markerWidth="4"
-                markerHeight="4"
-                orient="auto-start-reverse"
-              >
-                <path d="M 0 0 L 10 5 L 0 10 z" />
-              </marker>
-            </defs>
             <line
-              v-for="edge in topologyEdgesOnMap"
-              :key="edge.key"
-              :x1="edge.x1"
-              :y1="edge.y1"
-              :x2="edge.x2"
-              :y2="edge.y2"
-              :class="['topology-edge', edge.className]"
-              marker-end="url(#topology-arrow)"
+              v-for="edge in renderedRouteEdges"
+              :key="edge.id"
+              :class="['route-edge-line', { selected: selectedRouteEdgeId === edge.id }]"
+              :x1="edge.from.x"
+              :y1="edge.from.y"
+              :x2="edge.to.x"
+              :y2="edge.to.y"
+              vector-effect="non-scaling-stroke"
+              @pointerdown.stop
+              @pointerup.stop="onRouteEdgePointerUp(edge, $event)"
+              @click.stop="onRouteEdgeClick(edge, $event)"
+              @contextmenu.prevent.stop="deleteRouteEdge(edge.id)"
+            />
+
+            <polyline
+              v-if="routePathPolyline"
+              class="route-path-line"
+              :points="routePathPolyline"
+              fill="none"
+              vector-effect="non-scaling-stroke"
+            />
+
+            <line
+              v-if="draftRouteEdge"
+              class="route-edge-draft"
+              :x1="draftRouteEdge.fromX"
+              :y1="draftRouteEdge.fromY"
+              :x2="draftRouteEdge.toX"
+              :y2="draftRouteEdge.toY"
+              vector-effect="non-scaling-stroke"
+            />
+
+            <circle
+              v-for="node in routeNodes"
+              :key="node.id"
+              :class="[
+                'route-node',
+                {
+                  'route-start-node': routeStartNodeId === node.id,
+                  'route-end-node': routeEndNodeId === node.id,
+                },
+              ]"
+              :cx="node.x"
+              :cy="node.y"
+              :r="routeNodeRadius"
+              vector-effect="non-scaling-stroke"
+              @pointerdown.stop="onRouteNodePointerDown(node, $event)"
+              @pointerup.stop="onRouteNodePointerUp(node, $event)"
+              @click.stop="onRouteNodeClick(node)"
+              @contextmenu.prevent.stop="deleteRouteNode(node.id)"
             />
           </svg>
 
           <div
             v-for="camera in mappedCameras"
             :key="camera.id"
-            :class="['camera-pin', { 'active-pin': activeCameraId === camera.id, 'route-pin': routeStepByCameraId.has(camera.id) }]"
+            :class="['camera-pin', { 'active-pin': activeCameraId === camera.id }]"
             :style="cameraStyle(camera)"
             @mousedown.stop="startDrag(camera.id, $event)"
             @click.stop="onCameraClick(camera)"
             :title="camera.name"
           >
             <i class="pi pi-video"></i>
-            <span v-if="routeStepByCameraId.get(camera.id)" class="route-step">
-              {{ routeStepByCameraId.get(camera.id) }}
-            </span>
             <span class="pulse-ring" v-if="!isEditMode && activeCameraId === camera.id"></span>
             <div class="camera-tooltip">{{ camera.name }}</div>
           </div>
@@ -232,94 +217,34 @@
       </div>
 
       <div class="logs-section" v-if="!isEditMode">
-        <div class="route-header">
+        <div class="section-header">
           <div>
-            <h2>Маршрут гостя</h2>
-            <p>{{ selectedGuestName || 'Все гости' }}</p>
+            <h2>Камеры этажа</h2>
+            <p>{{ selectedFloorLabel || 'Этаж не выбран' }}</p>
           </div>
-          <span class="route-count">{{ currentFloorRoutePoints.length }}</span>
+          <span class="item-count">{{ mappedCameras.length }}</span>
         </div>
+
         <div class="logs-list">
-          <div v-for="point in currentFloorRoutePoints" :key="point.id" class="log-card route-card">
-            <div class="log-time">{{ formatTime(point.timestamp) }}</div>
-            <div class="log-info">
-              <div class="log-name">{{ point.guest_name }}</div>
-              <div class="log-camera">
-                <i class="pi pi-map-marker"></i> {{ point.camera_name || 'Камера не указана' }}
-              </div>
-              <div class="route-meta">
-                {{ point.floor_name || 'Этаж не указан' }}
-                <span v-if="point.confidence !== null">· {{ formatConfidence(point.confidence) }}</span>
+          <div v-for="camera in mappedCameras" :key="camera.id" class="camera-card" @click="openVideoModal(camera)">
+            <div class="camera-card-icon">
+              <i class="pi pi-video"></i>
+            </div>
+            <div class="camera-card-info">
+              <div class="camera-card-name">{{ camera.name }}</div>
+              <div class="camera-card-meta">
+                X: {{ formatPercent(camera.plan_x) }} · Y: {{ formatPercent(camera.plan_y) }}
               </div>
             </div>
           </div>
-          <div v-if="currentFloorRoutePoints.length === 0" class="empty-logs">
-            Маршрутных событий по выбранному этажу не найдено.
-          </div>
-        </div>
-
-        <div class="topology-section">
-          <div class="route-header topology-header">
-            <div>
-              <h2>Связи камер</h2>
-              <p>Автоопределение порядка за {{ TOPOLOGY_DAYS }} дней</p>
-            </div>
-            <span class="route-count topology-count">{{ currentFloorTransitions.length }}</span>
-          </div>
-
-          <div class="topology-list">
-            <div
-              v-for="edge in currentFloorTransitions"
-              :key="`${edge.from_camera_id}-${edge.to_camera_id}`"
-              class="transition-card"
-            >
-              <div class="transition-main">
-                <span>{{ edge.from_camera_name }}</span>
-                <i class="pi pi-arrow-right"></i>
-                <span>{{ edge.to_camera_name }}</span>
-              </div>
-              <div class="transition-meta">
-                {{ edge.transition_count }} переходов
-                · {{ edge.unique_person_count }} чел.
-                · медиана {{ formatDuration(edge.median_travel_seconds) }}
-                · {{ formatConfidence(edge.confidence) }}
-              </div>
-            </div>
-            <div v-if="currentFloorTransitions.length === 0" class="empty-topology">
-              Пока мало событий для определения порядка камер.
-            </div>
+          <div v-if="mappedCameras.length === 0" class="empty-logs">
+            На выбранном этаже камеры пока не размещены.
           </div>
         </div>
       </div>
 
       <div class="editor-sidebar" v-else>
         <h2>Настройка плана</h2>
-
-        <div class="plan-analysis-section">
-          <h3>Анализ плана</h3>
-          <p class="instruction-small">
-            Авторазбор плана подсвечивает стены, помещения, коридоры и возможные двери. Это подсказка, а не замена ручной разметки зон камер.
-          </p>
-          <div class="zone-actions">
-            <button
-              class="btn-secondary btn-sm"
-              @click="loadPlanAnalysis"
-              :disabled="planAnalysisLoading || !currentFloor?.has_plan"
-            >
-              <i class="pi pi-search"></i> {{ planAnalysisLoading ? 'Анализ...' : 'Найти элементы' }}
-            </button>
-            <button class="btn-text btn-sm" @click="showPlanAnalysis = !showPlanAnalysis" :disabled="!planAnalysis">
-              {{ showPlanAnalysis ? 'Скрыть' : 'Показать' }}
-            </button>
-          </div>
-          <div v-if="planAnalysis" class="analysis-stats">
-            {{ planAnalysis.walls?.length || 0 }} стен ·
-            {{ planAnalysis.corridors?.length || 0 }} коридоров ·
-            {{ planAnalysis.rooms?.length || 0 }} комнат ·
-            {{ planAnalysis.doors?.length || 0 }} дверей
-          </div>
-          <hr class="sidebar-divider" />
-        </div>
 
         <div v-if="unassignedCameras.length > 0" class="unassigned-section">
           <h3>Свободные камеры</h3>
@@ -350,25 +275,6 @@
               X: {{ formatPercent(activeCamera.plan_x) }} · Y: {{ formatPercent(activeCamera.plan_y) }}
             </div>
           </div>
-
-          <div class="info-group compact">
-            <label>Зона видимости</label>
-            <div class="cam-value">
-              {{ hasVisibilityPolygon(activeCamera) ? '4 точки размечены' : 'Не размечена' }}
-            </div>
-          </div>
-
-          <div class="zone-editor-actions">
-            <button class="btn-secondary btn-sm" @click="resetActiveCameraZone">
-              <i class="pi pi-vector-square"></i> {{ hasVisibilityPolygon(activeCamera) ? 'Сбросить зону' : 'Создать зону' }}
-            </button>
-            <button class="btn-text btn-sm btn-danger" @click="clearActiveCameraZone" :disabled="!hasVisibilityPolygon(activeCamera)">
-              Очистить
-            </button>
-          </div>
-          <p class="instruction-small">
-            Перетаскивайте углы 4-угольника на плане, чтобы примерно отметить участок, который видит камера.
-          </p>
 
           <button class="btn-text btn-danger remove-btn" @click="removeCameraFromFloor(activeCamera.id)">
             <i class="pi pi-times"></i> Убрать с плана
@@ -484,15 +390,14 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch, onBeforeUnmount, nextTick } from 'vue'
-import { analyticsApi } from '../api/analytics'
-import { camerasApi } from '../api/cameras'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { buildingsApi } from '../api/buildings'
-import { floorsApi } from '../api/floors'
-import { guestsApi } from '../api/guests'
 import { buildWsUrl } from '../api/client'
-import { useAuth } from '../services/auth'
+import { camerasApi } from '../api/cameras'
+import { floorsApi } from '../api/floors'
+import { routeGraphApi } from '../api/routeGraph'
 import { createCanvasStreamPlayer } from '../services/liveStream'
+import { useAuth } from '../services/auth'
 import { useUi } from '../services/ui'
 
 defineOptions({ name: 'TrackingPage' })
@@ -500,34 +405,43 @@ defineOptions({ name: 'TrackingPage' })
 const auth = useAuth()
 const ui = useUi()
 const canEditPlan = computed(() => auth.hasAnyRole('super_admin'))
-const TOPOLOGY_DAYS = 30
 
-const routePoints = ref([])
-const cameraTransitions = ref([])
-const planAnalysis = ref(null)
-const showPlanAnalysis = ref(true)
-const planAnalysisLoading = ref(false)
-const guests = ref([])
 const buildings = ref([])
 const floors = ref([])
 const mappedCameras = ref([])
-
 const unassignedCameras = ref([])
 const camerasToRemoveFromFloor = ref([])
 
 const selectedBuildingId = ref('')
 const selectedFloorId = ref('')
-const selectedGuestId = ref('')
 const activeCameraId = ref(null)
 
 const isEditMode = ref(false)
 const mapContainer = ref(null)
+const planImage = ref(null)
+const routeSvg = ref(null)
 const draggingCameraId = ref(null)
-const draggingZone = ref(null)
-const draggingZoneHandle = ref(null)
 const savingPlan = ref(false)
 const floorsLoading = ref(false)
 const planVersion = ref(Date.now())
+
+const graphMode = ref('markup')
+const routeNodes = ref([])
+const routeEdges = ref([])
+const routePathNodes = ref([])
+const routeStartNodeId = ref(null)
+const routeEndNodeId = ref(null)
+const selectedRouteEdgeId = ref(null)
+const draftRouteEdge = ref(null)
+const routeGraphLoading = ref(false)
+const planImageMetrics = ref({
+  naturalWidth: 1,
+  naturalHeight: 1,
+  left: 0,
+  top: 0,
+  width: 0,
+  height: 0,
+})
 
 const buildingModalVisible = ref(false)
 const buildingSaving = ref(false)
@@ -543,13 +457,8 @@ const hasVideoFrame = ref(false)
 const videoCanvas = ref(null)
 
 let livePlayer = null
-
-const toLocalDateInputValue = (value = new Date()) => {
-  const offsetMs = value.getTimezoneOffset() * 60000
-  return new Date(value.getTime() - offsetMs).toISOString().slice(0, 10)
-}
-
-const routeDate = ref(toLocalDateInputValue())
+let planResizeObserver = null
+let suppressNextRouteEdgeClick = false
 
 const selectedBuilding = computed(() => buildings.value.find((item) => String(item.id) === String(selectedBuildingId.value)) || null)
 const currentFloor = computed(() => floors.value.find((item) => String(item.id) === String(selectedFloorId.value)) || null)
@@ -564,132 +473,46 @@ const currentPlanUrl = computed(() => {
   if (!selectedFloorId.value || !currentFloor.value?.has_plan) return ''
   const baseUrl = floorsApi.getFloorPlanUrl(selectedFloorId.value)
   const separator = baseUrl.includes('?') ? '&' : '?'
-  
   return `${baseUrl}${separator}v=${planVersion.value}`
 })
 
 const activeCamera = computed(() => mappedCameras.value.find((camera) => camera.id === activeCameraId.value) || null)
-const selectedGuestName = computed(() => {
-  const guest = guests.value.find((item) => String(item.id) === String(selectedGuestId.value))
-  return guest ? buildGuestName(guest) : ''
+const routeGraphAvailable = computed(() => Boolean(selectedFloorId.value && currentFloor.value?.has_plan))
+const routeSvgViewBox = computed(() => {
+  const { naturalWidth, naturalHeight } = planImageMetrics.value
+  return `0 0 ${naturalWidth || 1} ${naturalHeight || 1}`
 })
-
-const currentFloorRoutePoints = computed(() => {
-  if (!selectedFloorId.value) return routePoints.value
-  return routePoints.value.filter((point) => String(point.floor_id) === String(selectedFloorId.value))
-})
-
-const cameraById = computed(() => new Map(mappedCameras.value.map((camera) => [camera.id, camera])))
-
-const currentFloorTransitions = computed(() => cameraTransitions.value.filter((edge) => {
-  const fromCamera = cameraById.value.get(edge.from_camera_id)
-  const toCamera = cameraById.value.get(edge.to_camera_id)
-  return Boolean(fromCamera && toCamera)
-}))
-
-const visibilityZonesOnMap = computed(() => {
-  return mappedCameras.value
-    .map((camera) => {
-      const polygon = normalizeVisibilityPolygon(camera.visibility_polygon)
-      if (!polygon) return null
-      return {
-        key: `zone-${camera.id}`,
-        cameraId: camera.id,
-        active: activeCameraId.value === camera.id,
-        points: polygon.map((point) => `${point.x * 100},${point.y * 100}`).join(' '),
-      }
-    })
-    .filter(Boolean)
-})
-
-const topologyEdgesOnMap = computed(() => {
-  return currentFloorTransitions.value
-    .map((edge) => {
-      const fromCamera = cameraById.value.get(edge.from_camera_id)
-      const toCamera = cameraById.value.get(edge.to_camera_id)
-      if (!fromCamera || !toCamera) return null
-
-      const fromX = Number(fromCamera.plan_x ?? 0.5) * 100
-      const fromY = Number(fromCamera.plan_y ?? 0.5) * 100
-      const toX = Number(toCamera.plan_x ?? 0.5) * 100
-      const toY = Number(toCamera.plan_y ?? 0.5) * 100
-      const dx = toX - fromX
-      const dy = toY - fromY
-      const length = Math.hypot(dx, dy)
-      if (length < 0.1) return null
-
-      const offset = 3
-      const unitX = dx / length
-      const unitY = dy / length
-
-      return {
-        key: `${edge.from_camera_id}-${edge.to_camera_id}`,
-        x1: fromX + unitX * offset,
-        y1: fromY + unitY * offset,
-        x2: toX - unitX * offset,
-        y2: toY - unitY * offset,
-        className: topologyConfidenceClass(edge.confidence),
-      }
-    })
-    .filter(Boolean)
-})
-
-const routePathsOnMap = computed(() => {
-  const paths = []
-  let currentPoints = []
-  let currentGuestId = null
-
-  const flush = () => {
-    if (currentPoints.length >= 2) {
-      paths.push({
-        key: `route-${paths.length + 1}-${currentGuestId ?? 'guest'}`,
-        d: buildSmoothRoutePath(currentPoints),
-      })
-    }
-    currentPoints = []
-    currentGuestId = null
+const planOverlayStyle = computed(() => {
+  const { left, top, width, height } = planImageMetrics.value
+  return {
+    left: `${left}px`,
+    top: `${top}px`,
+    width: `${width}px`,
+    height: `${height}px`,
   }
-
-  currentFloorRoutePoints.value.forEach((point) => {
-    const x = Number(point.plan_x)
-    const y = Number(point.plan_y)
-    if (Number.isNaN(x) || Number.isNaN(y)) {
-      flush()
-      return
-    }
-    if (currentGuestId !== null && currentGuestId !== point.guest_id) {
-      flush()
-    }
-    currentGuestId = point.guest_id
-    currentPoints.push({ x: x * 100, y: y * 100 })
-  })
-  flush()
-
-  return paths.filter((path) => path.d)
 })
+const routeNodeRadius = computed(() => Math.max(8, planImageMetrics.value.naturalWidth / 120))
+const routeNodesById = computed(() => new Map(routeNodes.value.map((node) => [node.id, node])))
+const renderedRouteEdges = computed(() =>
+  routeEdges.value
+    .map((edge) => ({
+      ...edge,
+      from: routeNodesById.value.get(edge.from_node_id),
+      to: routeNodesById.value.get(edge.to_node_id),
+    }))
+    .filter((edge) => edge.from && edge.to)
+)
+const routePathPolyline = computed(() =>
+  routePathNodes.value.map((node) => `${node.x},${node.y}`).join(' ')
+)
 
-const analysisWallsOnMap = computed(() => normalizeAnalysisLines(planAnalysis.value?.walls))
-const analysisDoorsOnMap = computed(() => normalizeAnalysisLines(planAnalysis.value?.doors))
-const analysisRoomsOnMap = computed(() => normalizeAnalysisPolygons(planAnalysis.value?.rooms))
-const analysisCorridorsOnMap = computed(() => normalizeAnalysisPolygons(planAnalysis.value?.corridors))
+function clamp01(value) {
+  return Math.max(0, Math.min(1, value))
+}
 
-const mapOverlayVisible = computed(() => {
-  return (
-    visibilityZonesOnMap.value.length > 0 ||
-    routePathsOnMap.value.length > 0 ||
-    (showPlanAnalysis.value && planAnalysis.value)
-  )
-})
-
-const routeStepByCameraId = computed(() => {
-  const steps = new Map()
-  currentFloorRoutePoints.value.forEach((point, index) => {
-    if (point.camera_id && !steps.has(point.camera_id)) {
-      steps.set(point.camera_id, index + 1)
-    }
-  })
-  return steps
-})
+function formatPercent(value) {
+  return typeof value === 'number' ? `${(value * 100).toFixed(1)}%` : '—'
+}
 
 function cameraStyle(camera) {
   const x = typeof camera.plan_x === 'number' ? camera.plan_x : 0.5
@@ -697,204 +520,92 @@ function cameraStyle(camera) {
   return { left: `${x * 100}%`, top: `${y * 100}%` }
 }
 
-function clamp01(value) {
-  return Math.max(0, Math.min(1, value))
-}
-
-function normalizeVisibilityPolygon(value) {
-  if (!Array.isArray(value) || value.length !== 4) return null
-  const points = value
-    .map((point) => ({
-      x: clamp01(Number(point?.x)),
-      y: clamp01(Number(point?.y)),
-    }))
-    .filter((point) => !Number.isNaN(point.x) && !Number.isNaN(point.y))
-  return points.length === 4 ? points : null
-}
-
-function hasVisibilityPolygon(camera) {
-  return Boolean(camera && normalizeVisibilityPolygon(camera.visibility_polygon))
-}
-
-function zoneHandleStyle(point) {
-  return {
-    left: `${clamp01(Number(point?.x)) * 100}%`,
-    top: `${clamp01(Number(point?.y)) * 100}%`,
-  }
-}
-
-function buildDefaultVisibilityPolygon(camera) {
-  const x = clamp01(Number(camera?.plan_x ?? 0.5))
-  const y = clamp01(Number(camera?.plan_y ?? 0.5))
-  const nearHalfWidth = 0.045
-  const farHalfWidth = 0.13
-  const nearOffset = 0.035
-  const farOffset = 0.22
-  return [
-    { x: clamp01(x - nearHalfWidth), y: clamp01(y - nearOffset) },
-    { x: clamp01(x + nearHalfWidth), y: clamp01(y - nearOffset) },
-    { x: clamp01(x + farHalfWidth), y: clamp01(y + farOffset) },
-    { x: clamp01(x - farHalfWidth), y: clamp01(y + farOffset) },
-  ]
-}
-
-function normalizeAnalysisLines(value) {
-  return (Array.isArray(value) ? value : [])
-    .map((line) => ({
-      x1: clamp01(Number(line?.x1)) * 100,
-      y1: clamp01(Number(line?.y1)) * 100,
-      x2: clamp01(Number(line?.x2)) * 100,
-      y2: clamp01(Number(line?.y2)) * 100,
-    }))
-    .filter((line) => Object.values(line).every((item) => !Number.isNaN(item)))
-}
-
-function normalizeAnalysisPolygons(value) {
-  return (Array.isArray(value) ? value : [])
-    .map((item) => {
-      const polygon = Array.isArray(item?.polygon) ? item.polygon : []
-      const points = polygon
-        .map((point) => {
-          const x = clamp01(Number(point?.x))
-          const y = clamp01(Number(point?.y))
-          if (Number.isNaN(x) || Number.isNaN(y)) return null
-          return `${x * 100},${y * 100}`
-        })
-        .filter(Boolean)
-      return points.length >= 3 ? { points: points.join(' ') } : null
-    })
-    .filter(Boolean)
-}
-
-function buildSmoothRoutePath(points) {
-  if (!Array.isArray(points) || points.length < 2) return ''
-  const commands = [`M ${points[0].x.toFixed(2)} ${points[0].y.toFixed(2)}`]
-
-  for (let index = 1; index < points.length - 1; index += 1) {
-    const previous = points[index - 1]
-    const current = points[index]
-    const next = points[index + 1]
-    const incoming = Math.hypot(current.x - previous.x, current.y - previous.y)
-    const outgoing = Math.hypot(next.x - current.x, next.y - current.y)
-    const radius = Math.min(4.5, incoming * 0.35, outgoing * 0.35)
-
-    if (radius < 0.5 || incoming < 0.1 || outgoing < 0.1) {
-      commands.push(`L ${current.x.toFixed(2)} ${current.y.toFixed(2)}`)
-      continue
-    }
-
-    const inX = (current.x - previous.x) / incoming
-    const inY = (current.y - previous.y) / incoming
-    const outX = (next.x - current.x) / outgoing
-    const outY = (next.y - current.y) / outgoing
-    const beforeTurn = {
-      x: current.x - inX * radius,
-      y: current.y - inY * radius,
-    }
-    const afterTurn = {
-      x: current.x + outX * radius,
-      y: current.y + outY * radius,
-    }
-
-    commands.push(`L ${beforeTurn.x.toFixed(2)} ${beforeTurn.y.toFixed(2)}`)
-    commands.push(
-      `Q ${current.x.toFixed(2)} ${current.y.toFixed(2)} ${afterTurn.x.toFixed(2)} ${afterTurn.y.toFixed(2)}`
-    )
-  }
-
-  const last = points[points.length - 1]
-  commands.push(`L ${last.x.toFixed(2)} ${last.y.toFixed(2)}`)
-  return commands.join(' ')
-}
-
-function formatPercent(value) {
-  return typeof value === 'number' ? `${(value * 100).toFixed(1)}%` : '—'
-}
-
-function formatConfidence(value) {
-  return `${Math.round(Number(value || 0) * 100)}%`
-}
-
-function formatDuration(seconds) {
-  const safeSeconds = Math.max(0, Number(seconds || 0))
-  if (safeSeconds < 60) return `${Math.round(safeSeconds)} с`
-  const minutes = Math.floor(safeSeconds / 60)
-  const restSeconds = Math.round(safeSeconds % 60)
-  return restSeconds > 0 ? `${minutes} мин ${restSeconds} с` : `${minutes} мин`
-}
-
-function topologyConfidenceClass(value) {
-  const confidence = Number(value || 0)
-  if (confidence >= 0.7) return 'strong'
-  if (confidence >= 0.45) return 'medium'
-  return 'weak'
-}
-
-function buildGuestName(guest) {
-  return [guest.last_name, guest.first_name, guest.middle_name].filter(Boolean).join(' ')
-}
-
-function formatTime(isoString) {
-  if (!isoString) return '—';
-  
-  const match = String(isoString).match(/(\d{2}:\d{2}:\d{2})/);
-  
-  if (match) {
-    return match[1];
-  }
-  
-  return isoString;
-}
-
 function getMouseNormalized(event) {
   if (!mapContainer.value) return { x: 0.5, y: 0.5 }
   const rect = mapContainer.value.getBoundingClientRect()
   return {
     x: clamp01((event.clientX - rect.left) / rect.width),
-    y: clamp01((event.clientY - rect.top) / rect.height)
+    y: clamp01((event.clientY - rect.top) / rect.height),
   }
+}
+
+function updatePlanImageMetrics() {
+  if (!mapContainer.value || !planImage.value?.naturalWidth || !planImage.value?.naturalHeight) return
+
+  const containerRect = mapContainer.value.getBoundingClientRect()
+  const naturalWidth = planImage.value.naturalWidth
+  const naturalHeight = planImage.value.naturalHeight
+  const scale = Math.min(containerRect.width / naturalWidth, containerRect.height / naturalHeight)
+  const width = naturalWidth * scale
+  const height = naturalHeight * scale
+
+  planImageMetrics.value = {
+    naturalWidth,
+    naturalHeight,
+    left: (containerRect.width - width) / 2,
+    top: (containerRect.height - height) / 2,
+    width,
+    height,
+  }
+}
+
+function onPlanImageLoad() {
+  updatePlanImageMetrics()
+}
+
+function getRoutePointerOriginal(event) {
+  if (!routeSvg.value) return null
+  const rect = routeSvg.value.getBoundingClientRect()
+  if (!rect.width || !rect.height) return null
+
+  const { naturalWidth, naturalHeight } = planImageMetrics.value
+  return {
+    x: clamp01((event.clientX - rect.left) / rect.width) * naturalWidth,
+    y: clamp01((event.clientY - rect.top) / rect.height) * naturalHeight,
+  }
+}
+
+function projectPointToSegment(point, from, to) {
+  const dx = to.x - from.x
+  const dy = to.y - from.y
+  const lengthSquared = dx * dx + dy * dy
+  if (!lengthSquared) return { ...from }
+
+  const t = clamp01(((point.x - from.x) * dx + (point.y - from.y) * dy) / lengthSquared)
+  return {
+    x: from.x + t * dx,
+    y: from.y + t * dy,
+  }
+}
+
+function getPointOnRouteEdge(edge, point) {
+  const from = edge.from || routeNodesById.value.get(edge.from_node_id)
+  const to = edge.to || routeNodesById.value.get(edge.to_node_id)
+  if (!from || !to) return point
+  return projectPointToSegment(point, from, to)
+}
+
+function resetRouteSelection() {
+  routeStartNodeId.value = null
+  routeEndNodeId.value = null
+  routePathNodes.value = []
+}
+
+function clearRouteGraphState() {
+  routeNodes.value = []
+  routeEdges.value = []
+  selectedRouteEdgeId.value = null
+  draftRouteEdge.value = null
+  resetRouteSelection()
+}
+
+function distributeFallbackX(index, total) {
+  if (total <= 1) return 0.5
+  return 0.15 + (0.7 / (total - 1)) * index
 }
 
 function selectCamera(id) {
   activeCameraId.value = id
-}
-
-function startZoneHandleDrag(cameraId, pointIndex, event) {
-  if (!isEditMode.value) return
-  activeCameraId.value = cameraId
-  if (event && typeof event.preventDefault === 'function') {
-    event.preventDefault()
-  }
-  draggingZoneHandle.value = { cameraId, pointIndex }
-}
-
-function startZoneDrag(cameraId, event) {
-  if (!isEditMode.value) return
-  const camera = mappedCameras.value.find((item) => item.id === cameraId)
-  const polygon = normalizeVisibilityPolygon(camera?.visibility_polygon)
-  if (!camera || !polygon) return
-
-  activeCameraId.value = cameraId
-  if (event && typeof event.preventDefault === 'function') {
-    event.preventDefault()
-  }
-  const { x, y } = getMouseNormalized(event)
-  draggingZone.value = {
-    cameraId,
-    startX: x,
-    startY: y,
-    originalPolygon: polygon.map((point) => ({ ...point })),
-  }
-}
-
-function resetActiveCameraZone() {
-  if (!activeCamera.value) return
-  activeCamera.value.visibility_polygon = buildDefaultVisibilityPolygon(activeCamera.value)
-}
-
-function clearActiveCameraZone() {
-  if (!activeCamera.value) return
-  activeCamera.value.visibility_polygon = null
 }
 
 function onCameraClick(camera) {
@@ -917,9 +628,7 @@ function openVideoModal(camera) {
   hasVideoFrame.value = false
 
   nextTick().then(() => {
-    if (!videoCanvas.value || !displayVideoDialog.value) {
-      return
-    }
+    if (!videoCanvas.value || !displayVideoDialog.value) return
 
     livePlayer = createCanvasStreamPlayer({
       url: getVideoWsUrl(camera.id),
@@ -932,8 +641,7 @@ function openVideoModal(camera) {
         ui.error('Ошибка подключения к потоку камеры')
         closeVideoModal()
       },
-      onClose: (event) => {
-        console.log('[video] websocket closed', event.code, event.reason)
+      onClose: () => {
         livePlayer = null
       },
     })
@@ -954,42 +662,12 @@ function closeVideoModal() {
 function startDrag(id, event) {
   if (!isEditMode.value) return
   selectCamera(id)
-  if (event && typeof event.preventDefault === 'function') {
-    event.preventDefault()
-  }
+  if (event && typeof event.preventDefault === 'function') event.preventDefault()
   draggingCameraId.value = id
 }
 
 function onMapMouseMove(event) {
-  if (!isEditMode.value) return
-  if (draggingZoneHandle.value) {
-    const camera = mappedCameras.value.find((item) => item.id === draggingZoneHandle.value.cameraId)
-    const polygon = normalizeVisibilityPolygon(camera?.visibility_polygon)
-    if (!camera || !polygon) return
-    const { x, y } = getMouseNormalized(event)
-    polygon[draggingZoneHandle.value.pointIndex] = { x, y }
-    camera.visibility_polygon = polygon
-    return
-  }
-  if (draggingZone.value) {
-    const camera = mappedCameras.value.find((item) => item.id === draggingZone.value.cameraId)
-    if (!camera) return
-    const { x, y } = getMouseNormalized(event)
-    const originalPolygon = draggingZone.value.originalPolygon
-    const minX = Math.min(...originalPolygon.map((point) => point.x))
-    const maxX = Math.max(...originalPolygon.map((point) => point.x))
-    const minY = Math.min(...originalPolygon.map((point) => point.y))
-    const maxY = Math.max(...originalPolygon.map((point) => point.y))
-    const dx = Math.max(-minX, Math.min(1 - maxX, x - draggingZone.value.startX))
-    const dy = Math.max(-minY, Math.min(1 - maxY, y - draggingZone.value.startY))
-
-    camera.visibility_polygon = originalPolygon.map((point) => ({
-      x: clamp01(point.x + dx),
-      y: clamp01(point.y + dy),
-    }))
-    return
-  }
-  if (!draggingCameraId.value) return
+  if (!isEditMode.value || !draggingCameraId.value) return
   const camera = mappedCameras.value.find((item) => item.id === draggingCameraId.value)
   if (!camera) return
 
@@ -1000,58 +678,47 @@ function onMapMouseMove(event) {
 
 function onMapMouseUp() {
   draggingCameraId.value = null
-  draggingZone.value = null
-  draggingZoneHandle.value = null
 }
 
 async function loadUnassignedCameras() {
   try {
     const response = await camerasApi.getCameras()
-    unassignedCameras.value = response.data.filter((c) => !c.floor_id)
+    unassignedCameras.value = response.data.filter((camera) => !camera.floor_id)
   } catch (error) {
     console.error('Ошибка загрузки свободных камер:', error)
   }
 }
 
 function addCameraToFloor(camera) {
-  const placedCamera = {
+  mappedCameras.value.push({
     ...camera,
     plan_x: 0.5,
     plan_y: 0.5,
-    visibility_polygon: null,
     building_id: Number(selectedBuildingId.value),
-    floor_id: Number(selectedFloorId.value)
-  }
-  placedCamera.visibility_polygon = buildDefaultVisibilityPolygon(placedCamera)
-  mappedCameras.value.push(placedCamera)
-  unassignedCameras.value = unassignedCameras.value.filter((c) => c.id !== camera.id)
+    floor_id: Number(selectedFloorId.value),
+  })
+  unassignedCameras.value = unassignedCameras.value.filter((item) => item.id !== camera.id)
   activeCameraId.value = camera.id
 }
 
 function removeCameraFromFloor(id) {
-  const camIndex = mappedCameras.value.findIndex((c) => c.id === id)
-  if (camIndex > -1) {
-    const cam = mappedCameras.value[camIndex]
-    mappedCameras.value.splice(camIndex, 1)
-    unassignedCameras.value.push(cam)
-    camerasToRemoveFromFloor.value.push(cam.id)
-    if (activeCameraId.value === id) {
-      activeCameraId.value = null
-    }
-  }
+  const cameraIndex = mappedCameras.value.findIndex((camera) => camera.id === id)
+  if (cameraIndex < 0) return
+
+  const camera = mappedCameras.value[cameraIndex]
+  mappedCameras.value.splice(cameraIndex, 1)
+  unassignedCameras.value.push(camera)
+  camerasToRemoveFromFloor.value.push(camera.id)
+  if (activeCameraId.value === id) activeCameraId.value = null
 }
 
 async function toggleEditMode() {
-  if (!canEditPlan.value) return
-  if (!selectedFloorId.value) return
-  
+  if (!canEditPlan.value || !selectedFloorId.value) return
+
   isEditMode.value = true
   activeCameraId.value = null
   camerasToRemoveFromFloor.value = []
   draggingCameraId.value = null
-  draggingZone.value = null
-  draggingZoneHandle.value = null
-  
   await loadUnassignedCameras()
 }
 
@@ -1060,17 +727,14 @@ function cancelEditMode() {
   isEditMode.value = false
   activeCameraId.value = null
   draggingCameraId.value = null
-  draggingZone.value = null
-  draggingZoneHandle.value = null
-  camerasToRemoveFromFloor.value = [] 
+  camerasToRemoveFromFloor.value = []
   loadFloorContext()
 }
 
 async function savePlan() {
-  if (!canEditPlan.value) return
-  if (!selectedFloorId.value) return
+  if (!canEditPlan.value || !selectedFloorId.value) return
   savingPlan.value = true
-  
+
   try {
     const updatePromises = mappedCameras.value.map((camera) =>
       camerasApi.updateCamera(camera.id, {
@@ -1078,41 +742,356 @@ async function savePlan() {
         floor_id: Number(currentFloor.value?.id) || null,
         plan_x: clamp01(typeof camera.plan_x === 'number' ? camera.plan_x : 0.5),
         plan_y: clamp01(typeof camera.plan_y === 'number' ? camera.plan_y : 0.5),
-        visibility_polygon: normalizeVisibilityPolygon(camera.visibility_polygon)
       })
     )
 
-    const removePromises = camerasToRemoveFromFloor.value.map((camId) =>
-      camerasApi.updateCamera(camId, {
+    const removePromises = camerasToRemoveFromFloor.value.map((cameraId) =>
+      camerasApi.updateCamera(cameraId, {
         building_id: null,
         floor_id: null,
         plan_x: null,
         plan_y: null,
-        visibility_polygon: null
       })
     )
 
-    await Promise.all([
-      ...updatePromises,
-      ...removePromises,
-    ])
+    await Promise.all([...updatePromises, ...removePromises])
 
     isEditMode.value = false
     activeCameraId.value = null
-    draggingZone.value = null
-    draggingZoneHandle.value = null
+    draggingCameraId.value = null
     camerasToRemoveFromFloor.value = []
-    
+
     await loadFloorContext()
-    await loadGuestRoute()
-    await loadUnassignedCameras() 
-    
-    ui.success('Положение камер и зоны видимости сохранены')
+    await loadUnassignedCameras()
+
+    ui.success('Положение камер успешно сохранено')
   } catch (error) {
-    console.error("Ошибка сохранения плана:", error.response?.data || error)
+    console.error('Ошибка сохранения плана:', error.response?.data || error)
     ui.error(ui.getErrorMessage(error, 'Не удалось сохранить позиции камер'))
   } finally {
     savingPlan.value = false
+  }
+}
+
+function setGraphMode(mode) {
+  if (!routeGraphAvailable.value || isEditMode.value) return
+  if (mode === 'markup' && !canEditPlan.value) return
+  graphMode.value = mode
+  draftRouteEdge.value = null
+  selectedRouteEdgeId.value = null
+}
+
+async function loadRouteGraph() {
+  if (!selectedFloorId.value) {
+    clearRouteGraphState()
+    return
+  }
+
+  routeGraphLoading.value = true
+  try {
+    const response = await routeGraphApi.getGraph(selectedFloorId.value)
+    routeNodes.value = response.data.nodes || []
+    routeEdges.value = response.data.edges || []
+    selectedRouteEdgeId.value = null
+    draftRouteEdge.value = null
+    resetRouteSelection()
+  } catch (error) {
+    clearRouteGraphState()
+    ui.error(ui.getErrorMessage(error, 'Не удалось загрузить граф маршрутов этажа'))
+  } finally {
+    routeGraphLoading.value = false
+  }
+}
+
+async function createRouteNodeAt(event) {
+  if (!canEditPlan.value || graphMode.value !== 'markup' || isEditMode.value || !selectedFloorId.value) return
+  if (event.button !== 0) return
+
+  const point = getRoutePointerOriginal(event)
+  if (!point) return
+
+  await createRouteNodeFromPoint(point)
+}
+
+async function createRouteNodeFromPoint(point, { resetPath = true } = {}) {
+  try {
+    const response = await routeGraphApi.createNode(selectedFloorId.value, point)
+    const node = response.data
+    routeNodes.value.push(node)
+    if (resetPath) resetRouteSelection()
+    return node
+  } catch (error) {
+    ui.error(ui.getErrorMessage(error, 'Не удалось создать точку маршрута'))
+    return null
+  }
+}
+
+function onRouteSvgPointerDown(event) {
+  void createRouteNodeAt(event)
+}
+
+function onRouteNodePointerDown(node, event) {
+  if (!canEditPlan.value || graphMode.value !== 'markup' || isEditMode.value) return
+  if (event.button !== 0) return
+
+  event.preventDefault()
+  selectedRouteEdgeId.value = null
+  draftRouteEdge.value = {
+    fromNodeId: node.id,
+    fromX: node.x,
+    fromY: node.y,
+    toX: node.x,
+    toY: node.y,
+  }
+}
+
+function onRouteSvgPointerMove(event) {
+  if (!draftRouteEdge.value) return
+  const point = getRoutePointerOriginal(event)
+  if (!point) return
+
+  draftRouteEdge.value = {
+    ...draftRouteEdge.value,
+    toX: point.x,
+    toY: point.y,
+  }
+}
+
+function cancelDraftRouteEdge() {
+  draftRouteEdge.value = null
+}
+
+async function onRouteSvgPointerUp(event) {
+  const draft = draftRouteEdge.value
+  if (!draft) return
+  draftRouteEdge.value = null
+  if (event.button !== 0) return
+
+  const point = getRoutePointerOriginal(event)
+  if (!point) return
+
+  const targetNode = await createRouteNodeFromPoint(point, { resetPath: false })
+  if (!targetNode) return
+
+  await createRouteEdgeBetween(draft.fromNodeId, targetNode.id, { rollbackNodeId: targetNode.id })
+}
+
+function onRouteNodePointerUp(node, event) {
+  if (!draftRouteEdge.value || event.button !== 0) return
+  void finishRouteEdgeDrag(node)
+}
+
+function onRouteEdgePointerUp(edge, event) {
+  const draft = draftRouteEdge.value
+  if (!draft || event.button !== 0) return
+
+  event.preventDefault()
+  suppressNextRouteEdgeClick = true
+  draftRouteEdge.value = null
+
+  const point = getRoutePointerOriginal(event)
+  if (!point) return
+
+  void splitRouteEdgeAtPoint(edge, point, { connectFromNodeId: draft.fromNodeId })
+}
+
+function onRouteEdgeClick(edge, event) {
+  if (suppressNextRouteEdgeClick) {
+    suppressNextRouteEdgeClick = false
+    return
+  }
+
+  if (canEditPlan.value && graphMode.value === 'markup' && !isEditMode.value) {
+    void splitRouteEdgeAtPointer(edge, event)
+    return
+  }
+
+  selectRouteEdge(edge.id)
+}
+
+async function finishRouteEdgeDrag(targetNode) {
+  const draft = draftRouteEdge.value
+  draftRouteEdge.value = null
+  if (!draft || !targetNode || draft.fromNodeId === targetNode.id) return
+
+  await createRouteEdgeBetween(draft.fromNodeId, targetNode.id)
+}
+
+async function persistRouteEdge(fromNodeId, toNodeId, isBidirectional = true) {
+  const response = await routeGraphApi.createEdge(selectedFloorId.value, {
+    from_node_id: fromNodeId,
+    to_node_id: toNodeId,
+    is_bidirectional: isBidirectional,
+  })
+  return response.data
+}
+
+function upsertRouteEdge(nextEdge) {
+  const existingIndex = routeEdges.value.findIndex((edge) => edge.id === nextEdge.id)
+  if (existingIndex >= 0) {
+    routeEdges.value[existingIndex] = nextEdge
+  } else {
+    routeEdges.value.push(nextEdge)
+  }
+}
+
+async function createRouteEdgeBetween(fromNodeId, toNodeId, { rollbackNodeId = null } = {}) {
+  try {
+    const nextEdge = await persistRouteEdge(fromNodeId, toNodeId)
+    upsertRouteEdge(nextEdge)
+    resetRouteSelection()
+  } catch (error) {
+    if (rollbackNodeId) {
+      try {
+        await routeGraphApi.deleteNode(rollbackNodeId)
+        routeNodes.value = routeNodes.value.filter((node) => node.id !== rollbackNodeId)
+      } catch (rollbackError) {
+        console.error('Не удалось откатить точку после ошибки создания линии:', rollbackError)
+      }
+    }
+    ui.error(ui.getErrorMessage(error, 'Не удалось создать линию маршрута'))
+  }
+}
+
+async function splitRouteEdgeAtPointer(edge, event) {
+  const point = getRoutePointerOriginal(event)
+  if (!point) return
+  await splitRouteEdgeAtPoint(edge, point)
+}
+
+async function splitRouteEdgeAtPoint(edge, point, { connectFromNodeId = null } = {}) {
+  if (!canEditPlan.value || graphMode.value !== 'markup' || isEditMode.value || !selectedFloorId.value) return
+  if (!edge?.id) return
+
+  const splitPoint = getPointOnRouteEdge(edge, point)
+  const newNode = await createRouteNodeFromPoint(splitPoint, { resetPath: false })
+  if (!newNode) return
+
+  const createdEdges = []
+  try {
+    createdEdges.push(await persistRouteEdge(edge.from_node_id, newNode.id, edge.is_bidirectional))
+    createdEdges.push(await persistRouteEdge(newNode.id, edge.to_node_id, edge.is_bidirectional))
+
+    const splitAlreadyConnects =
+      connectFromNodeId === null ||
+      connectFromNodeId === edge.from_node_id ||
+      (connectFromNodeId === edge.to_node_id && edge.is_bidirectional)
+
+    if (!splitAlreadyConnects) {
+      createdEdges.push(await persistRouteEdge(connectFromNodeId, newNode.id, true))
+    }
+
+    await routeGraphApi.deleteEdge(edge.id)
+    routeEdges.value = routeEdges.value.filter((item) => item.id !== edge.id)
+    createdEdges.forEach(upsertRouteEdge)
+    selectedRouteEdgeId.value = null
+    resetRouteSelection()
+  } catch (error) {
+    try {
+      await routeGraphApi.deleteNode(newNode.id)
+      routeNodes.value = routeNodes.value.filter((node) => node.id !== newNode.id)
+    } catch (rollbackError) {
+      console.error('Не удалось откатить точку после ошибки разбиения линии:', rollbackError)
+    }
+
+    await loadRouteGraph()
+    ui.error(ui.getErrorMessage(error, 'Не удалось вставить точку в линию маршрута'))
+  }
+}
+
+function selectRouteEdge(edgeId) {
+  selectedRouteEdgeId.value = edgeId
+}
+
+async function deleteRouteNode(nodeId) {
+  if (!canEditPlan.value) return
+
+  try {
+    await routeGraphApi.deleteNode(nodeId)
+    routeNodes.value = routeNodes.value.filter((node) => node.id !== nodeId)
+    routeEdges.value = routeEdges.value.filter(
+      (edge) => edge.from_node_id !== nodeId && edge.to_node_id !== nodeId
+    )
+    if (routeStartNodeId.value === nodeId || routeEndNodeId.value === nodeId) {
+      resetRouteSelection()
+    }
+  } catch (error) {
+    ui.error(ui.getErrorMessage(error, 'Не удалось удалить точку маршрута'))
+  }
+}
+
+async function deleteRouteEdge(edgeId) {
+  if (!canEditPlan.value) return
+
+  try {
+    await routeGraphApi.deleteEdge(edgeId)
+    routeEdges.value = routeEdges.value.filter((edge) => edge.id !== edgeId)
+    if (selectedRouteEdgeId.value === edgeId) selectedRouteEdgeId.value = null
+    resetRouteSelection()
+  } catch (error) {
+    ui.error(ui.getErrorMessage(error, 'Не удалось удалить линию маршрута'))
+  }
+}
+
+function clearRoutePath() {
+  resetRouteSelection()
+}
+
+async function confirmClearRouteGraph() {
+  if (!canEditPlan.value || !selectedFloorId.value) return
+  const confirmed = await ui.confirm({
+    header: 'Очистить граф маршрутов?',
+    message: 'Все точки и линии на выбранном этаже будут удалены. Камеры и план этажа останутся без изменений.',
+    acceptLabel: 'Очистить граф',
+    acceptSeverity: 'danger',
+  })
+  if (!confirmed) return
+
+  try {
+    await routeGraphApi.clearGraph(selectedFloorId.value)
+    clearRouteGraphState()
+    ui.success('Граф маршрутов этажа очищен')
+  } catch (error) {
+    ui.error(ui.getErrorMessage(error, 'Не удалось очистить граф маршрутов'))
+  }
+}
+
+async function onRouteNodeClick(node) {
+  if (graphMode.value !== 'path' || isEditMode.value) return
+  selectedRouteEdgeId.value = null
+
+  if (!routeStartNodeId.value || routeEndNodeId.value) {
+    routeStartNodeId.value = node.id
+    routeEndNodeId.value = null
+    routePathNodes.value = []
+    return
+  }
+
+  if (routeStartNodeId.value === node.id) {
+    ui.warn('Выберите вторую точку маршрута')
+    return
+  }
+
+  routeEndNodeId.value = node.id
+  await buildRoutePath()
+}
+
+async function buildRoutePath() {
+  if (!selectedFloorId.value || !routeStartNodeId.value || !routeEndNodeId.value) return
+
+  try {
+    const response = await routeGraphApi.buildPath(selectedFloorId.value, {
+      start_node_id: routeStartNodeId.value,
+      end_node_id: routeEndNodeId.value,
+    })
+    routePathNodes.value = response.data.nodes || []
+  } catch (error) {
+    routePathNodes.value = []
+    if (error?.response?.status === 404) {
+      ui.warn('Маршрут между выбранными точками не найден')
+    } else {
+      ui.error(ui.getErrorMessage(error, 'Не удалось построить маршрут'))
+    }
   }
 }
 
@@ -1122,78 +1101,16 @@ function onPlanImageError(event) {
 
 async function loadInitialData() {
   try {
-    const [guestsRes, buildingsRes] = await Promise.all([
-      guestsApi.getGuests(),
-      buildingsApi.getBuildings()
-    ])
-    guests.value = guestsRes.data
-    buildings.value = buildingsRes.data
+    const response = await buildingsApi.getBuildings()
+    buildings.value = response.data
 
     if (!selectedBuildingId.value && buildings.value.length > 0) {
       selectedBuildingId.value = String(buildings.value[0].id)
     } else if (selectedBuildingId.value) {
       await loadFloorsForBuilding(selectedBuildingId.value)
-      await loadGuestRoute()
     }
   } catch (error) {
     ui.error(ui.getErrorMessage(error, 'Не удалось загрузить данные страницы плана здания'))
-  }
-}
-
-async function loadPlanAnalysis() {
-  if (!selectedFloorId.value || !currentFloor.value?.has_plan) {
-    return ui.warn('Сначала загрузите план этажа')
-  }
-  planAnalysisLoading.value = true
-  try {
-    const response = await floorsApi.analyzePlan(selectedFloorId.value)
-    planAnalysis.value = response.data
-    showPlanAnalysis.value = true
-    ui.success('План проанализирован. Проверьте подсветку и разметьте зоны камер вручную.')
-  } catch (error) {
-    planAnalysis.value = null
-    ui.error(ui.getErrorMessage(error, 'Не удалось проанализировать план этажа'))
-  } finally {
-    planAnalysisLoading.value = false
-  }
-}
-
-async function loadGuestRoute() {
-  try {
-    const response = await analyticsApi.getGuestRoute({
-      guestId: selectedGuestId.value,
-      targetDate: routeDate.value,
-      buildingId: selectedBuildingId.value,
-      limit: 300,
-    })
-    routePoints.value = response.data
-  } catch (error) {
-    routePoints.value = []
-    ui.error(ui.getErrorMessage(error, 'Не удалось загрузить маршрут гостя'))
-  }
-}
-
-async function loadCameraTransitions() {
-  if (!selectedBuildingId.value || !selectedFloorId.value) {
-    cameraTransitions.value = []
-    return
-  }
-
-  try {
-    const response = await analyticsApi.getCameraTransitions({
-      targetDate: routeDate.value,
-      days: TOPOLOGY_DAYS,
-      buildingId: selectedBuildingId.value,
-      floorId: selectedFloorId.value,
-      personType: 'all',
-      maxGapMinutes: 45,
-      minCount: 1,
-      limit: 120,
-    })
-    cameraTransitions.value = response.data
-  } catch (error) {
-    cameraTransitions.value = []
-    ui.error(ui.getErrorMessage(error, 'Не удалось загрузить связи камер'))
   }
 }
 
@@ -1218,14 +1135,15 @@ async function loadFloorsForBuilding(buildingId) {
 async function loadFloorContext() {
   if (!selectedBuildingId.value || !selectedFloorId.value) {
     mappedCameras.value = []
-    planAnalysis.value = null
     activeCameraId.value = null
+    clearRouteGraphState()
     return
   }
+
   try {
     const [floorRes, camerasRes] = await Promise.all([
       floorsApi.getFloor(selectedFloorId.value),
-      camerasApi.getCameras({ buildingId: selectedBuildingId.value, floorId: selectedFloorId.value })
+      camerasApi.getCameras({ buildingId: selectedBuildingId.value, floorId: selectedFloorId.value }),
     ])
     const floor = floorRes.data
     floors.value = floors.value.map((item) => (item.id === floor.id ? floor : item))
@@ -1233,23 +1151,20 @@ async function loadFloorContext() {
       ...camera,
       plan_x: typeof camera.plan_x === 'number' && camera.plan_x !== null ? camera.plan_x : distributeFallbackX(index, camerasRes.data.length),
       plan_y: typeof camera.plan_y === 'number' && camera.plan_y !== null ? camera.plan_y : 0.5,
-      visibility_polygon: normalizeVisibilityPolygon(camera.visibility_polygon)
     }))
     if (!mappedCameras.value.some((item) => item.id === activeCameraId.value)) {
       activeCameraId.value = null
     }
     planVersion.value = Date.now()
+    await loadRouteGraph()
+    await nextTick()
+    updatePlanImageMetrics()
   } catch (error) {
     mappedCameras.value = []
-    planAnalysis.value = null
     activeCameraId.value = null
+    clearRouteGraphState()
     ui.error(ui.getErrorMessage(error, 'Не удалось загрузить данные этажа'))
   }
-}
-
-function distributeFallbackX(index, total) {
-  if (total <= 1) return 0.5
-  return 0.15 + (0.7 / (total - 1)) * index
 }
 
 function openBuildingModal() {
@@ -1270,7 +1185,7 @@ async function saveBuilding() {
   try {
     const response = await buildingsApi.createBuilding({
       name: buildingForm.value.name.trim(),
-      address: buildingForm.value.address.trim() || null
+      address: buildingForm.value.address.trim() || null,
     })
     await loadInitialData()
     selectedBuildingId.value = String(response.data.id)
@@ -1293,7 +1208,7 @@ function openFloorModal(editCurrent = false) {
       name: currentFloor.value.name,
       floor_number: String(currentFloor.value.floor_number),
       planFile: null,
-      remove_plan: false
+      remove_plan: false,
     }
   } else {
     floorForm.value = {
@@ -1302,7 +1217,7 @@ function openFloorModal(editCurrent = false) {
       name: '',
       floor_number: '',
       planFile: null,
-      remove_plan: false
+      remove_plan: false,
     }
   }
   floorModalVisible.value = true
@@ -1340,20 +1255,20 @@ async function saveFloor() {
     } else {
       response = await floorsApi.createFloor(formData)
     }
-    
+
     const targetBuildingId = String(floorForm.value.building_id)
-    const targetFloorId = String(response.data.id) 
-    
+    const targetFloorId = String(response.data.id)
+
     await loadInitialData()
     selectedBuildingId.value = targetBuildingId
     await loadFloorsForBuilding(targetBuildingId)
-    
+
     if (selectedFloorId.value === targetFloorId) {
       await loadFloorContext()
     } else {
       selectedFloorId.value = targetFloorId
     }
-    
+
     closeFloorModal()
     ui.success(isEditingFloor ? 'Этаж обновлён' : 'Этаж создан')
   } catch (error) {
@@ -1367,13 +1282,11 @@ watch(selectedBuildingId, async (newValue) => {
   isEditMode.value = false
   activeCameraId.value = null
   mappedCameras.value = []
+  clearRouteGraphState()
   floors.value = []
   selectedFloorId.value = ''
-  planAnalysis.value = null
   if (!newValue) return
   await loadFloorsForBuilding(newValue)
-  await loadGuestRoute()
-  await loadCameraTransitions()
 })
 
 watch(selectedFloorId, async (newValue) => {
@@ -1381,24 +1294,27 @@ watch(selectedFloorId, async (newValue) => {
   activeCameraId.value = null
   if (!newValue) {
     mappedCameras.value = []
-    planAnalysis.value = null
+    clearRouteGraphState()
     return
   }
-  planAnalysis.value = null
   await loadFloorContext()
-  await loadCameraTransitions()
-})
-
-watch([selectedGuestId, routeDate], async () => {
-  await loadGuestRoute()
-  await loadCameraTransitions()
 })
 
 onMounted(async () => {
   await loadInitialData()
+  window.addEventListener('resize', updatePlanImageMetrics)
+  if (window.ResizeObserver && mapContainer.value) {
+    planResizeObserver = new ResizeObserver(updatePlanImageMetrics)
+    planResizeObserver.observe(mapContainer.value)
+  }
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('resize', updatePlanImageMetrics)
+  if (planResizeObserver) {
+    planResizeObserver.disconnect()
+    planResizeObserver = null
+  }
   closeVideoModal()
 })
 </script>
@@ -1410,9 +1326,8 @@ onBeforeUnmount(() => {
 .page-title { font-size: 1.5rem; font-weight: 600; color: #0f172a; margin: 0; }
 .page-subtitle { margin: 0.35rem 0 0; color: #64748b; font-size: 0.9rem; }
 .top-buttons, .filter-actions { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
-.filters-row { display: grid; grid-template-columns: minmax(190px, 1fr) minmax(190px, 1fr) minmax(190px, 1fr) minmax(150px, 0.7fr) auto; gap: 1rem; padding: 1rem 1.25rem; align-items: end; }
+.filters-row { display: grid; grid-template-columns: minmax(190px, 1fr) minmax(190px, 1fr) auto; gap: 1rem; padding: 1rem 1.25rem; align-items: end; }
 .filter-group { display: flex; flex-direction: column; gap: 0.4rem; }
-.filter-group.compact { min-width: 150px; }
 .filter-group label { font-size: 0.85rem; color: #475569; font-weight: 600; }
 .form-input { width: 100%; padding: 0.7rem 0.9rem; border-radius: 8px; border: 1px solid #cbd5e1; background: #f8fafc; font-size: 0.95rem; color: #1e293b; }
 .form-input:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12); background: #ffffff; }
@@ -1424,31 +1339,9 @@ onBeforeUnmount(() => {
 .btn-text { background: transparent; color: #64748b; }
 .btn-primary:disabled, .btn-secondary:disabled, .btn-success:disabled, .btn-text:disabled { opacity: 0.6; cursor: not-allowed; }
 
-.tracking-grid { 
-  
-  display: flex;
-  flex-direction: row;
-  gap: 1rem; 
-  height: fit-content; 
-  max-height: 800px;
-  align-items: stretch; 
-}
-
-.map-section {
-  flex: 2.1;
-  display: flex; 
-  flex-direction: column; 
-  padding: 1rem;  
-  min-height: 0; 
-}
-
-.logs-section, .editor-sidebar { 
-  flex: 1;
-  display: flex; 
-  flex-direction: column; 
-  padding: 1rem; 
-  min-height: 0; 
-}
+.tracking-grid { display: flex; flex-direction: row; gap: 1rem; height: fit-content; max-height: 800px; align-items: stretch; }
+.map-section { flex: 2.1; display: flex; flex-direction: column; padding: 1rem; min-height: 0; }
+.logs-section, .editor-sidebar { flex: 1; display: flex; flex-direction: column; padding: 1rem; min-height: 0; }
 .map-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem; gap: 1rem; }
 .map-header h2, .logs-section h2, .editor-sidebar h2 { margin: 0; font-size: 1.15rem; color: #0f172a; }
 .map-header p { margin: 0.25rem 0 0; color: #64748b; font-size: 0.88rem; }
@@ -1456,6 +1349,13 @@ onBeforeUnmount(() => {
 .plan-status { padding: 0.35rem 0.7rem; border-radius: 999px; font-size: 0.75rem; font-weight: 700; }
 .plan-status.ready { background: #dcfce7; color: #166534; }
 .plan-status.missing { background: #fef3c7; color: #92400e; }
+
+.route-toolbar { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.75rem; padding: 0.65rem; border-radius: 10px; background: #f8fafc; border: 1px solid #e2e8f0; }
+.mode-button { border: 1px solid #cbd5e1; border-radius: 999px; background: #ffffff; color: #334155; padding: 0.45rem 0.75rem; font-weight: 700; cursor: pointer; }
+.mode-button.active { border-color: #0891b2; background: #cffafe; color: #155e75; }
+.mode-button:disabled { opacity: 0.55; cursor: not-allowed; }
+.btn-compact { padding: 0.45rem 0.65rem; }
+.graph-counter { margin-left: auto; color: #475569; font-size: 0.85rem; font-weight: 700; }
 
 .map-container { position: relative; flex: 1; min-height: 520px; background: #f8fafc; border-radius: 10px; overflow: hidden; border: 1px solid #e2e8f0; }
 .map-container.is-editing { cursor: move; }
@@ -1465,75 +1365,39 @@ onBeforeUnmount(() => {
 .plan-empty-title { color: #475569; font-weight: 700; }
 .plan-empty-text { max-width: 360px; line-height: 1.4; }
 
+.route-graph-layer { position: absolute; z-index: 1; overflow: visible; touch-action: none; }
+.route-graph-layer.is-markup-mode { cursor: crosshair; }
+.route-graph-layer.is-path-mode { cursor: default; }
+.route-edge-line { stroke: #111827; stroke-width: 2.5; stroke-linecap: round; cursor: pointer; opacity: 0.82; }
+.route-edge-line:hover, .route-edge-line.selected { stroke: #f97316; stroke-width: 4; opacity: 1; }
+.route-edge-draft { stroke: #0891b2; stroke-width: 3; stroke-dasharray: 10 8; stroke-linecap: round; pointer-events: none; }
+.route-path-line { stroke: #ef4444; stroke-width: 8; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; filter: drop-shadow(0 2px 4px rgba(239, 68, 68, 0.35)); }
+.route-node { fill: #ffffff; stroke: #0891b2; stroke-width: 4; cursor: pointer; filter: drop-shadow(0 2px 4px rgba(15, 23, 42, 0.25)); }
+.route-node:hover { fill: #cffafe; stroke: #0e7490; }
+.route-start-node { fill: #dcfce7; stroke: #16a34a; }
+.route-end-node { fill: #fee2e2; stroke: #dc2626; }
+
 .camera-pin { position: absolute; width: 30px; height: 30px; border-radius: 50%; background: #3b82f6; color: #ffffff; display: flex; align-items: center; justify-content: center; transform: translate(-50%, -50%); box-shadow: 0 4px 10px rgba(15, 23, 42, 0.2); cursor: pointer; z-index: 2; }
 .is-editing .camera-pin { cursor: grab; }
 .is-editing .camera-pin:active { cursor: grabbing; }
 .camera-pin.active-pin { background: #10b981; box-shadow: 0 0 0 5px rgba(16, 185, 129, 0.18); }
-.camera-pin.route-pin { background: #f59e0b; box-shadow: 0 0 0 5px rgba(245, 158, 11, 0.2); }
 .camera-tooltip { display: none; position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%); background: #0f172a; color: white; padding: 0.35rem 0.55rem; border-radius: 6px; font-size: 0.75rem; white-space: nowrap; }
 .camera-pin:hover .camera-tooltip { display: block; }
-.route-step { position: absolute; right: -8px; top: -8px; min-width: 18px; height: 18px; padding: 0 0.25rem; border-radius: 999px; background: #ffffff; color: #92400e; border: 1px solid #fbbf24; display: inline-flex; align-items: center; justify-content: center; font-size: 0.68rem; font-weight: 800; line-height: 1; }
-
-.topology-layer { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; }
-.topology-layer marker path { fill: #0f766e; }
-.topology-edge { stroke: #0f766e; stroke-width: 0.75; stroke-linecap: round; opacity: 0.72; vector-effect: non-scaling-stroke; }
-.topology-edge.strong { stroke: #0f766e; opacity: 0.92; stroke-width: 1; }
-.topology-edge.medium { stroke: #f59e0b; opacity: 0.78; }
-.topology-edge.weak { stroke: #94a3b8; opacity: 0.58; stroke-dasharray: 3 2; }
-
-.map-overlay-layer { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; }
-.analysis-wall { stroke: #0f172a; stroke-width: 0.55; stroke-linecap: round; opacity: 0.4; vector-effect: non-scaling-stroke; }
-.analysis-door { stroke: #22c55e; stroke-width: 1.1; stroke-linecap: round; opacity: 0.72; stroke-dasharray: 2 1; vector-effect: non-scaling-stroke; }
-.analysis-room { fill: rgba(59, 130, 246, 0.1); stroke: rgba(37, 99, 235, 0.24); stroke-width: 0.5; vector-effect: non-scaling-stroke; }
-.analysis-corridor { fill: rgba(20, 184, 166, 0.13); stroke: rgba(15, 118, 110, 0.32); stroke-width: 0.65; vector-effect: non-scaling-stroke; }
-.camera-zone { fill: rgba(245, 158, 11, 0.14); stroke: rgba(217, 119, 6, 0.58); stroke-width: 0.85; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
-.camera-zone.active { fill: rgba(16, 185, 129, 0.18); stroke: rgba(5, 150, 105, 0.9); stroke-width: 1.1; }
-.camera-zone.editable { pointer-events: all; cursor: grab; }
-.camera-zone.editable:active { cursor: grabbing; }
-.route-curve-line { fill: none; stroke: #f97316; stroke-width: 2.35; stroke-linecap: round; stroke-linejoin: round; opacity: 0.96; vector-effect: non-scaling-stroke; filter: drop-shadow(0 1px 2px rgba(124, 45, 18, 0.25)); }
-.zone-handle { position: absolute; z-index: 4; width: 22px; height: 22px; transform: translate(-50%, -50%); border-radius: 999px; background: #ffffff; border: 2px solid #059669; color: #047857; display: flex; align-items: center; justify-content: center; font-size: 0.68rem; font-weight: 800; cursor: grab; box-shadow: 0 3px 9px rgba(15, 23, 42, 0.2); }
-.zone-handle:active { cursor: grabbing; }
-
 .pulse-ring { position: absolute; inset: -2px; border: 2px solid #10b981; border-radius: 50%; animation: pulse 1.5s infinite; }
 @keyframes pulse { 0% { transform: scale(1); opacity: 1; } 100% { transform: scale(2.4); opacity: 0; } }
 
-.logs-list { 
-  margin-top: 1rem; 
-  overflow-y: auto; 
-  display: flex; 
-  flex-direction: column; 
-  gap: 0.75rem; 
-  flex: 1; 
-  height: 0; 
-  padding-right: 0.5rem; 
-}
-.route-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
-.route-header p { margin: 0.25rem 0 0; color: #64748b; font-size: 0.85rem; }
-.route-count { min-width: 34px; height: 28px; padding: 0 0.6rem; border-radius: 999px; background: #fef3c7; color: #92400e; display: inline-flex; align-items: center; justify-content: center; font-weight: 800; }
-.log-card { display: flex; gap: 1rem; align-items: center; padding: 0.8rem 0.9rem; border-radius: 8px; background: #f8fafc; border: 1px solid #e2e8f0; }
-.route-card { border-left: 4px solid #f59e0b; }
-.log-time { font-family: monospace; font-size: 0.82rem; color: #64748b; min-width: 70px; }
-.log-name { color: #0f172a; font-weight: 600; }
-.log-camera { margin-top: 0.2rem; font-size: 0.82rem; color: #64748b; display: flex; align-items: center; gap: 0.3rem; }
-.route-meta { margin-top: 0.2rem; color: #94a3b8; font-size: 0.78rem; }
+.section-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.section-header p { margin: 0.25rem 0 0; color: #64748b; font-size: 0.85rem; }
+.item-count { min-width: 34px; height: 28px; padding: 0 0.6rem; border-radius: 999px; background: #dbeafe; color: #1d4ed8; display: inline-flex; align-items: center; justify-content: center; font-weight: 800; }
+.logs-list { margin-top: 1rem; overflow-y: auto; display: flex; flex-direction: column; gap: 0.75rem; flex: 1; height: 0; padding-right: 0.5rem; }
+.camera-card { display: flex; gap: 0.8rem; align-items: center; padding: 0.8rem 0.9rem; border-radius: 8px; background: #f8fafc; border: 1px solid #e2e8f0; cursor: pointer; }
+.camera-card:hover { border-color: #bfdbfe; background: #eff6ff; }
+.camera-card-icon { width: 34px; height: 34px; border-radius: 999px; background: #dbeafe; color: #2563eb; display: flex; align-items: center; justify-content: center; }
+.camera-card-name { color: #0f172a; font-weight: 700; }
+.camera-card-meta { margin-top: 0.2rem; color: #64748b; font-size: 0.82rem; }
 .empty-logs, .empty-selection { margin: auto 0; text-align: center; color: #94a3b8; }
 
-.topology-section { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #e2e8f0; }
-.topology-header h2 { font-size: 1.05rem; }
-.topology-count { background: #ccfbf1; color: #115e59; }
-.topology-list { margin-top: 0.75rem; display: flex; flex-direction: column; gap: 0.55rem; max-height: 230px; overflow-y: auto; padding-right: 0.4rem; }
-.transition-card { padding: 0.75rem 0.85rem; border-radius: 9px; background: #f8fafc; border: 1px solid #dbeafe; border-left: 4px solid #0f766e; }
-.transition-main { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 0.5rem; color: #0f172a; font-size: 0.84rem; font-weight: 700; }
-.transition-main span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.transition-main i { color: #0f766e; font-size: 0.8rem; }
-.transition-meta { margin-top: 0.35rem; color: #64748b; font-size: 0.76rem; line-height: 1.35; }
-.empty-topology { padding: 1rem 0.5rem; text-align: center; color: #94a3b8; font-size: 0.86rem; }
-
 .unassigned-section { margin-bottom: 1.5rem; }
-.plan-analysis-section { margin-top: 1rem; }
-.plan-analysis-section h3 { font-size: 1.05rem; margin: 0 0 0.5rem 0; color: #0f172a; }
-.zone-actions, .zone-editor-actions { display: flex; flex-wrap: wrap; gap: 0.45rem; margin-top: 0.65rem; }
-.analysis-stats { margin-top: 0.7rem; font-size: 0.82rem; color: #64748b; font-weight: 600; }
 .unassigned-section h3 { font-size: 1.05rem; margin: 0 0 0.5rem 0; color: #0f172a; }
 .instruction-small { font-size: 0.82rem; color: #64748b; margin: 0 0 0.75rem 0; line-height: 1.3; }
 .unassigned-list { display: flex; flex-direction: column; gap: 0.5rem; max-height: 220px; overflow-y: auto; padding-right: 0.25rem; }
@@ -1555,7 +1419,6 @@ onBeforeUnmount(() => {
 .modal-overlay { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.55); display: flex; align-items: center; justify-content: center; z-index: 1000; }
 .modal-content { width: min(1100px, calc(100vw - 2rem)); background: #ffffff; border-radius: 16px; padding: 1.5rem; box-shadow: 0 20px 40px rgba(15, 23, 42, 0.25); }
 .small-modal { width: min(460px, calc(100vw - 2rem)); }
-
 .video-modal { max-width: 1200px; padding: 1.5rem; }
 .video-container { width: 100%; aspect-ratio: 4 / 3; background-color: #0f172a; border-radius: 6px; overflow: hidden; display: flex; align-items: center; justify-content: center; }
 .live-video { width: 100%; height: 100%; object-fit: contain; }
@@ -1570,13 +1433,12 @@ onBeforeUnmount(() => {
 .form-group { display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 1rem; }
 .form-group label { color: #475569; font-weight: 600; font-size: 0.85rem; }
 .required { color: #ef4444; }
-.checkbox-group { flex-direction: row; align-items: center; }
 .upload-hint { margin: 0; color: #64748b; font-size: 0.8rem; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 0.75rem; }
 
 @media (max-width: 1200px) {
   .filters-row { grid-template-columns: 1fr 1fr; }
-  .tracking-grid { grid-template-columns: 1fr; }
+  .tracking-grid { flex-direction: column; max-height: none; }
   .map-container { min-height: 420px; }
 }
 @media (max-width: 768px) {
