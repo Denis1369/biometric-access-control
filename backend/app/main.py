@@ -11,10 +11,12 @@ from app.api import (
     analytics,
     auth,
     buildings,
+    camera_visibility,
     cameras,
     departments,
     employees,
     floors,
+    guest_routes,
     guests,
     job_positions,
     route_graph,
@@ -96,11 +98,13 @@ app.include_router(employees.router)
 app.include_router(departments.router)
 app.include_router(job_positions.router)
 app.include_router(cameras.router)
+app.include_router(camera_visibility.router)
 app.include_router(websockets.router)
 app.include_router(analytics.router)
 app.include_router(buildings.router)
 app.include_router(floors.router)
 app.include_router(route_graph.router)
+app.include_router(guest_routes.router)
 app.include_router(guests.router)
 app.include_router(users.router)
 app.include_router(video_analysis.router)

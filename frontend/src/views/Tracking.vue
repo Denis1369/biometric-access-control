@@ -136,7 +136,11 @@
             v-if="routeGraphAvailable"
             ref="routeSvg"
             class="route-graph-layer"
-            :class="{ 'is-path-mode': graphMode === 'path', 'is-markup-mode': graphMode === 'markup' && canEditPlan }"
+            :class="{
+              'is-path-mode': graphMode === 'path',
+              'is-markup-mode': graphMode === 'markup' && canEditPlan,
+              'is-zone-mode': isEditingCameraZone,
+            }"
             :style="planOverlayStyle"
             :viewBox="routeSvgViewBox"
             preserveAspectRatio="none"
@@ -146,6 +150,40 @@
             @pointerleave="cancelDraftRouteEdge"
             @contextmenu.prevent
           >
+            <defs>
+              <marker
+                id="guest-route-arrow"
+                viewBox="0 0 10 10"
+                refX="8"
+                refY="5"
+                markerWidth="7"
+                markerHeight="7"
+                orient="auto-start-reverse"
+              >
+                <path d="M 0 0 L 10 5 L 0 10 z" class="guest-route-direction-arrow"></path>
+              </marker>
+            </defs>
+
+            <polygon
+              v-for="zone in renderedCameraZones"
+              :key="`zone-${zone.camera_id}`"
+              :class="[
+                'camera-zone-polygon',
+                { selected: zone.selected, 'guest-route-zone': zone.inGuestRoute },
+              ]"
+              :points="zone.pointsString"
+              @pointerdown.stop="startDragSavedZone(zone, $event)"
+              @click.stop="selectCamera(zone.camera_id)"
+              @contextmenu.prevent.stop
+            />
+
+            <polygon
+              v-if="zoneDraftPoints.length >= 2"
+              class="camera-zone-polygon selected draft"
+              :points="formatPolygonPoints(zoneDraftPoints)"
+              @pointerdown.stop="startDragZonePolygon($event)"
+            />
+
             <line
               v-for="edge in renderedRouteEdges"
               :key="edge.id"
@@ -168,6 +206,27 @@
               fill="none"
               vector-effect="non-scaling-stroke"
             />
+
+            <polyline
+              v-if="guestRoutePolyline"
+              class="guest-probable-route-line"
+              :points="guestRoutePolyline"
+              fill="none"
+              vector-effect="non-scaling-stroke"
+              marker-mid="url(#guest-route-arrow)"
+              marker-end="url(#guest-route-arrow)"
+            />
+
+            <g
+              v-for="marker in guestRouteEventMarkers"
+              :key="marker.id"
+              class="guest-route-event-marker"
+            >
+              <circle :cx="marker.x" :cy="marker.y" :r="routeNodeRadius * 1.25" vector-effect="non-scaling-stroke" />
+              <text :x="marker.x" :y="marker.y" text-anchor="middle" dominant-baseline="central">
+                {{ marker.order }}
+              </text>
+            </g>
 
             <line
               v-if="draftRouteEdge"
@@ -198,6 +257,20 @@
               @click.stop="onRouteNodeClick(node)"
               @contextmenu.prevent.stop="deleteRouteNode(node.id)"
             />
+
+            <circle
+              v-for="(point, index) in editableZonePoints"
+              v-show="isEditingCameraZone"
+              :key="`zone-point-${index}`"
+              class="camera-zone-point"
+              :cx="point.x"
+              :cy="point.y"
+              :r="routeNodeRadius * 0.7"
+              vector-effect="non-scaling-stroke"
+              @pointerdown.stop="startDragZonePoint(index, $event)"
+              @pointerup.stop="finishZoneDrag"
+              @contextmenu.prevent.stop="resetActiveZoneDraft"
+            />
           </svg>
 
           <div
@@ -210,6 +283,7 @@
             :title="camera.name"
           >
             <i class="pi pi-video"></i>
+            <span v-if="cameraZonesByCameraId.has(camera.id)" class="camera-zone-indicator"></span>
             <span class="pulse-ring" v-if="!isEditMode && activeCameraId === camera.id"></span>
             <div class="camera-tooltip">{{ camera.name }}</div>
           </div>
@@ -226,7 +300,12 @@
         </div>
 
         <div class="logs-list">
-          <div v-for="camera in mappedCameras" :key="camera.id" class="camera-card" @click="openVideoModal(camera)">
+          <div
+            v-for="camera in mappedCameras"
+            :key="camera.id"
+            :class="['camera-card', { selected: activeCameraId === camera.id }]"
+            @click="onCameraCardClick(camera)"
+          >
             <div class="camera-card-icon">
               <i class="pi pi-video"></i>
             </div>
@@ -235,10 +314,56 @@
               <div class="camera-card-meta">
                 X: {{ formatPercent(camera.plan_x) }} · Y: {{ formatPercent(camera.plan_y) }}
               </div>
+              <div v-if="cameraZonesByCameraId.has(camera.id)" class="camera-card-meta zone-ready">
+                Зона видимости задана
+              </div>
             </div>
           </div>
           <div v-if="mappedCameras.length === 0" class="empty-logs">
             На выбранном этаже камеры пока не размещены.
+          </div>
+        </div>
+
+        <div class="side-panel">
+          <h3>Маршрут гостя</h3>
+          <div class="form-group compact-form">
+            <label>Гость</label>
+            <select v-model="selectedGuestId" class="form-input">
+              <option value="">Выберите гостя...</option>
+              <option v-for="guest in guests" :key="guest.id" :value="String(guest.id)">
+                {{ formatGuestName(guest) }}
+              </option>
+            </select>
+          </div>
+          <div class="form-group compact-form">
+            <label>Дата/время от</label>
+            <input v-model="guestRouteTimeFrom" class="form-input" type="datetime-local" />
+          </div>
+          <div class="form-group compact-form">
+            <label>Дата/время до</label>
+            <input v-model="guestRouteTimeTo" class="form-input" type="datetime-local" />
+          </div>
+          <div class="zone-actions">
+            <button class="btn-primary btn-sm" :disabled="guestRouteLoading || !selectedGuestId || !selectedFloorId" @click="buildGuestRoute">
+              {{ guestRouteLoading ? 'Построение...' : 'Построить маршрут гостя' }}
+            </button>
+            <button class="btn-text btn-sm" :disabled="!guestProbableRoute" @click="clearGuestRoute">
+              Очистить маршрут гостя
+            </button>
+          </div>
+
+          <div v-if="guestRouteWarnings.length" class="camera-zone-warning">
+            <div v-for="warning in guestRouteWarnings" :key="warning">{{ warning }}</div>
+          </div>
+
+          <div v-if="guestRouteEvents.length" class="guest-route-events">
+            <div v-for="(event, index) in guestRouteEvents" :key="`${event.source}-${event.tracking_log_id || event.access_log_id || index}`" class="guest-route-event-row">
+              <span class="event-order">{{ index + 1 }}</span>
+              <div>
+                <div class="camera-card-name">{{ event.camera_name || `Камера ${event.camera_id}` }}</div>
+                <div class="camera-card-meta">{{ formatTimestamp(event.timestamp) }}</div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -279,6 +404,33 @@
           <button class="btn-text btn-danger remove-btn" @click="removeCameraFromFloor(activeCamera.id)">
             <i class="pi pi-times"></i> Убрать с плана
           </button>
+
+          <div class="side-panel zone-editor-box">
+            <h3>Зона видимости камеры</h3>
+            <p class="instruction-small">
+              Нажмите «Задать зону», кликните 4 точки на плане. Вершины и весь полигон можно перетаскивать.
+            </p>
+            <div class="camera-card-meta">
+              {{ selectedCameraHasZone ? 'Зона сохранена' : 'Зона пока не задана' }}
+              <span v-if="zoneDraftCameraId === activeCamera.id">
+                · выбрано точек: {{ zoneDraftPoints.length }}/4
+              </span>
+            </div>
+            <div class="zone-actions">
+              <button class="btn-secondary btn-sm" @click="startZoneDraft">
+                {{ selectedCameraHasZone ? 'Редактировать зону' : 'Задать зону' }}
+              </button>
+              <button class="btn-success btn-sm" :disabled="zoneSaving || editableZonePoints.length !== 4" @click="saveActiveCameraZone">
+                Сохранить зону
+              </button>
+              <button class="btn-text btn-danger btn-sm" :disabled="!editableZonePoints.length" @click="resetActiveZoneDraft">
+                Сбросить
+              </button>
+              <button class="btn-text btn-danger btn-sm" :disabled="!selectedCameraHasZone" @click="deleteActiveCameraZone">
+                Удалить зону
+              </button>
+            </div>
+          </div>
         </div>
         <div v-else class="empty-selection">
           <p class="instruction">
@@ -393,9 +545,13 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { buildingsApi } from '../api/buildings'
 import { buildWsUrl } from '../api/client'
+import { cameraVisibilityApi } from '../api/cameraVisibility'
 import { camerasApi } from '../api/cameras'
 import { floorsApi } from '../api/floors'
+import { guestsApi } from '../api/guests'
+import { guestRoutesApi } from '../api/guestRoutes'
 import { routeGraphApi } from '../api/routeGraph'
+import { formatPolygonPoints, polygonCentroid } from '../services/geometry'
 import { createCanvasStreamPlayer } from '../services/liveStream'
 import { useAuth } from '../services/auth'
 import { useUi } from '../services/ui'
@@ -434,6 +590,18 @@ const routeEndNodeId = ref(null)
 const selectedRouteEdgeId = ref(null)
 const draftRouteEdge = ref(null)
 const routeGraphLoading = ref(false)
+const cameraZones = ref([])
+const zoneDraftPoints = ref([])
+const zoneDraftCameraId = ref(null)
+const draggingZonePointIndex = ref(null)
+const draggingZonePolygon = ref(null)
+const zoneSaving = ref(false)
+const guests = ref([])
+const selectedGuestId = ref('')
+const guestRouteTimeFrom = ref('')
+const guestRouteTimeTo = ref('')
+const guestRouteLoading = ref(false)
+const guestProbableRoute = ref(null)
 const planImageMetrics = ref({
   naturalWidth: 1,
   naturalHeight: 1,
@@ -504,6 +672,53 @@ const renderedRouteEdges = computed(() =>
 )
 const routePathPolyline = computed(() =>
   routePathNodes.value.map((node) => `${node.x},${node.y}`).join(' ')
+)
+const cameraZonesByCameraId = computed(() => new Map(cameraZones.value.map((zone) => [zone.camera_id, zone])))
+const activeCameraZone = computed(() =>
+  activeCameraId.value ? cameraZonesByCameraId.value.get(activeCameraId.value) || null : null
+)
+const isEditingCameraZone = computed(() =>
+  Boolean(isEditMode.value && canEditPlan.value && activeCameraId.value && zoneDraftCameraId.value === activeCameraId.value)
+)
+const editableZonePoints = computed(() => {
+  if (zoneDraftCameraId.value === activeCameraId.value) {
+    return zoneDraftPoints.value
+  }
+  return activeCameraZone.value?.points || []
+})
+const renderedCameraZones = computed(() =>
+  cameraZones.value
+    .filter((zone) => zoneDraftCameraId.value !== zone.camera_id)
+    .map((zone) => ({
+      ...zone,
+      pointsString: formatPolygonPoints(zone.points),
+      centroid: polygonCentroid(zone.points),
+      selected: zone.camera_id === activeCameraId.value,
+      inGuestRoute: Boolean(
+        guestProbableRoute.value?.camera_zones?.some((routeZone) => routeZone.camera_id === zone.camera_id)
+      ),
+    }))
+)
+const selectedCameraHasZone = computed(() => Boolean(activeCameraZone.value))
+const guestRoutePolyline = computed(() =>
+  (guestProbableRoute.value?.route_nodes || []).map((node) => `${node.x},${node.y}`).join(' ')
+)
+const guestRouteEvents = computed(() => guestProbableRoute.value?.events || [])
+const guestRouteWarnings = computed(() => guestProbableRoute.value?.warnings || [])
+const guestRouteEventMarkers = computed(() =>
+  guestRouteEvents.value
+    .map((event, index) => {
+      const zone = cameraZonesByCameraId.value.get(event.camera_id)
+      const points = zone?.points || guestProbableRoute.value?.camera_zones?.find((item) => item.camera_id === event.camera_id)?.points
+      if (!points?.length) return null
+      return {
+        ...polygonCentroid(points),
+        id: `${event.source}-${event.tracking_log_id || event.access_log_id || index}`,
+        order: index + 1,
+        camera_id: event.camera_id,
+      }
+    })
+    .filter(Boolean)
 )
 
 function clamp01(value) {
@@ -599,13 +814,28 @@ function clearRouteGraphState() {
   resetRouteSelection()
 }
 
+function clearCameraZonesState() {
+  cameraZones.value = []
+  zoneDraftPoints.value = []
+  zoneDraftCameraId.value = null
+  draggingZonePointIndex.value = null
+  draggingZonePolygon.value = null
+}
+
+function clearGuestRoute() {
+  guestProbableRoute.value = null
+}
+
 function distributeFallbackX(index, total) {
   if (total <= 1) return 0.5
   return 0.15 + (0.7 / (total - 1)) * index
 }
 
 function selectCamera(id) {
+  if (activeCameraId.value === id) return
   activeCameraId.value = id
+  zoneDraftPoints.value = []
+  zoneDraftCameraId.value = null
 }
 
 function onCameraClick(camera) {
@@ -614,6 +844,10 @@ function onCameraClick(camera) {
   } else {
     openVideoModal(camera)
   }
+}
+
+function onCameraCardClick(camera) {
+  openVideoModal(camera)
 }
 
 function getVideoWsUrl(cameraId) {
@@ -717,6 +951,10 @@ async function toggleEditMode() {
 
   isEditMode.value = true
   activeCameraId.value = null
+  zoneDraftPoints.value = []
+  zoneDraftCameraId.value = null
+  draggingZonePointIndex.value = null
+  draggingZonePolygon.value = null
   camerasToRemoveFromFloor.value = []
   draggingCameraId.value = null
   await loadUnassignedCameras()
@@ -727,6 +965,10 @@ function cancelEditMode() {
   isEditMode.value = false
   activeCameraId.value = null
   draggingCameraId.value = null
+  zoneDraftPoints.value = []
+  zoneDraftCameraId.value = null
+  draggingZonePointIndex.value = null
+  draggingZonePolygon.value = null
   camerasToRemoveFromFloor.value = []
   loadFloorContext()
 }
@@ -759,6 +1001,10 @@ async function savePlan() {
     isEditMode.value = false
     activeCameraId.value = null
     draggingCameraId.value = null
+    zoneDraftPoints.value = []
+    zoneDraftCameraId.value = null
+    draggingZonePointIndex.value = null
+    draggingZonePolygon.value = null
     camerasToRemoveFromFloor.value = []
 
     await loadFloorContext()
@@ -779,6 +1025,7 @@ function setGraphMode(mode) {
   graphMode.value = mode
   draftRouteEdge.value = null
   selectedRouteEdgeId.value = null
+  draggingZonePointIndex.value = null
 }
 
 async function loadRouteGraph() {
@@ -800,6 +1047,217 @@ async function loadRouteGraph() {
     ui.error(ui.getErrorMessage(error, 'Не удалось загрузить граф маршрутов этажа'))
   } finally {
     routeGraphLoading.value = false
+  }
+}
+
+async function loadCameraZones() {
+  if (!selectedFloorId.value) {
+    clearCameraZonesState()
+    return
+  }
+
+  try {
+    const response = await cameraVisibilityApi.getFloorZones(selectedFloorId.value)
+    cameraZones.value = response.data.zones || []
+    zoneDraftPoints.value = []
+    zoneDraftCameraId.value = null
+  } catch (error) {
+    clearCameraZonesState()
+    ui.error(ui.getErrorMessage(error, 'Не удалось загрузить зоны видимости камер'))
+  }
+}
+
+function startZoneDraft() {
+  if (!activeCamera.value) return ui.warn('Сначала выберите камеру')
+  if (!isEditMode.value) return ui.warn('Включите режим редактирования камер')
+  zoneDraftCameraId.value = activeCamera.value.id
+  zoneDraftPoints.value = activeCameraZone.value?.points?.map((point) => ({ ...point })) || []
+  draggingZonePolygon.value = null
+}
+
+function addZoneDraftPoint(event) {
+  if (!isEditingCameraZone.value || !activeCamera.value) return
+  if (event.button !== 0) return
+  if (zoneDraftPoints.value.length >= 4) return
+
+  const point = getRoutePointerOriginal(event)
+  if (!point) return
+  zoneDraftPoints.value.push(point)
+}
+
+function startDragZonePoint(index, event) {
+  if (!isEditingCameraZone.value || !activeCamera.value) return
+  if (event.button !== 0) return
+  draggingZonePolygon.value = null
+  draggingZonePointIndex.value = index
+}
+
+function moveZonePoint(event) {
+  const point = getRoutePointerOriginal(event)
+  if (!point || draggingZonePointIndex.value === null) return
+  zoneDraftPoints.value[draggingZonePointIndex.value] = point
+}
+
+function startDragSavedZone(zone, event) {
+  if (!canEditPlan.value || !isEditMode.value) return
+  if (event.button !== 0) return
+  if (activeCameraId.value !== zone.camera_id) {
+    activeCameraId.value = zone.camera_id
+  }
+  zoneDraftCameraId.value = zone.camera_id
+  zoneDraftPoints.value = zone.points.map((point) => ({ ...point }))
+  startDragZonePolygon(event)
+}
+
+function startDragZonePolygon(event) {
+  if (!isEditingCameraZone.value || !activeCamera.value) return
+  if (event.button !== 0 || zoneDraftPoints.value.length < 3) return
+
+  const startPoint = getRoutePointerOriginal(event)
+  if (!startPoint) return
+
+  event.preventDefault()
+  draggingZonePointIndex.value = null
+  draggingZonePolygon.value = {
+    startPoint,
+    originalPoints: zoneDraftPoints.value.map((point) => ({ ...point })),
+  }
+}
+
+function moveZonePolygon(event) {
+  if (!draggingZonePolygon.value) return
+  const point = getRoutePointerOriginal(event)
+  if (!point) return
+
+  const { naturalWidth, naturalHeight } = planImageMetrics.value
+  const originalPoints = draggingZonePolygon.value.originalPoints
+  const minX = Math.min(...originalPoints.map((item) => item.x))
+  const maxX = Math.max(...originalPoints.map((item) => item.x))
+  const minY = Math.min(...originalPoints.map((item) => item.y))
+  const maxY = Math.max(...originalPoints.map((item) => item.y))
+
+  const rawDx = point.x - draggingZonePolygon.value.startPoint.x
+  const rawDy = point.y - draggingZonePolygon.value.startPoint.y
+  const dx = Math.max(-minX, Math.min((naturalWidth || maxX) - maxX, rawDx))
+  const dy = Math.max(-minY, Math.min((naturalHeight || maxY) - maxY, rawDy))
+
+  zoneDraftPoints.value = originalPoints.map((item) => ({
+    x: item.x + dx,
+    y: item.y + dy,
+  }))
+}
+
+function finishZoneDrag() {
+  draggingZonePointIndex.value = null
+  draggingZonePolygon.value = null
+}
+
+function resetActiveZoneDraft() {
+  if (!activeCamera.value) return
+  zoneDraftCameraId.value = activeCamera.value.id
+  zoneDraftPoints.value = []
+  draggingZonePointIndex.value = null
+  draggingZonePolygon.value = null
+}
+
+async function saveActiveCameraZone() {
+  if (!activeCamera.value || !selectedFloorId.value) return
+  if (editableZonePoints.value.length !== 4) return ui.warn('Зона видимости должна содержать ровно 4 точки')
+
+  zoneSaving.value = true
+  try {
+    const response = await cameraVisibilityApi.saveCameraZone(activeCamera.value.id, {
+      floor_id: Number(selectedFloorId.value),
+      points: editableZonePoints.value,
+    })
+    const nextZone = response.data
+    const existingIndex = cameraZones.value.findIndex((zone) => zone.camera_id === nextZone.camera_id)
+    if (existingIndex >= 0) {
+      cameraZones.value[existingIndex] = nextZone
+    } else {
+      cameraZones.value.push(nextZone)
+    }
+    zoneDraftPoints.value = []
+    zoneDraftCameraId.value = null
+    draggingZonePointIndex.value = null
+    draggingZonePolygon.value = null
+    clearGuestRoute()
+    ui.success('Зона видимости камеры сохранена')
+  } catch (error) {
+    ui.error(ui.getErrorMessage(error, 'Не удалось сохранить зону видимости камеры'))
+  } finally {
+    zoneSaving.value = false
+  }
+}
+
+async function deleteActiveCameraZone() {
+  if (!activeCamera.value) return
+  const confirmed = await ui.confirm({
+    header: 'Удалить зону видимости?',
+    message: `Зона камеры «${activeCamera.value.name}» будет удалена.`,
+    acceptLabel: 'Удалить',
+    acceptSeverity: 'danger',
+  })
+  if (!confirmed) return
+
+  try {
+    await cameraVisibilityApi.deleteCameraZone(activeCamera.value.id)
+    cameraZones.value = cameraZones.value.filter((zone) => zone.camera_id !== activeCamera.value.id)
+    zoneDraftPoints.value = []
+    zoneDraftCameraId.value = null
+    draggingZonePointIndex.value = null
+    draggingZonePolygon.value = null
+    clearGuestRoute()
+    ui.success('Зона видимости камеры удалена')
+  } catch (error) {
+    ui.error(ui.getErrorMessage(error, 'Не удалось удалить зону видимости камеры'))
+  }
+}
+
+async function loadGuests() {
+  try {
+    const response = await guestsApi.getGuests()
+    guests.value = response.data || []
+  } catch (error) {
+    guests.value = []
+    ui.error(ui.getErrorMessage(error, 'Не удалось загрузить список гостей'))
+  }
+}
+
+function formatGuestName(guest) {
+  return [guest.last_name, guest.first_name, guest.middle_name].filter(Boolean).join(' ') || `Гость ${guest.id}`
+}
+
+function formatTimestamp(value) {
+  if (!value) return '—'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString('ru-RU')
+}
+
+async function buildGuestRoute() {
+  if (!selectedFloorId.value) return ui.warn('Выберите этаж')
+  if (!selectedGuestId.value) return ui.warn('Выберите гостя')
+
+  guestRouteLoading.value = true
+  try {
+    const response = await guestRoutesApi.getGuestProbableRoute(selectedFloorId.value, selectedGuestId.value, {
+      time_from: guestRouteTimeFrom.value,
+      time_to: guestRouteTimeTo.value,
+    })
+    guestProbableRoute.value = response.data
+    if (!response.data.events?.length) {
+      ui.warn('За выбранный период событий не найдено')
+    } else if ((response.data.warnings || []).length) {
+      ui.warn('Маршрут построен с предупреждениями')
+    } else {
+      ui.success('Вероятный маршрут гостя построен')
+    }
+  } catch (error) {
+    guestProbableRoute.value = null
+    ui.error(ui.getErrorMessage(error, 'Не удалось построить вероятный маршрут гостя'))
+  } finally {
+    guestRouteLoading.value = false
   }
 }
 
@@ -827,6 +1285,10 @@ async function createRouteNodeFromPoint(point, { resetPath = true } = {}) {
 }
 
 function onRouteSvgPointerDown(event) {
+  if (isEditingCameraZone.value) {
+    addZoneDraftPoint(event)
+    return
+  }
   void createRouteNodeAt(event)
 }
 
@@ -846,6 +1308,16 @@ function onRouteNodePointerDown(node, event) {
 }
 
 function onRouteSvgPointerMove(event) {
+  if (draggingZonePolygon.value) {
+    moveZonePolygon(event)
+    return
+  }
+
+  if (draggingZonePointIndex.value !== null) {
+    moveZonePoint(event)
+    return
+  }
+
   if (!draftRouteEdge.value) return
   const point = getRoutePointerOriginal(event)
   if (!point) return
@@ -859,9 +1331,21 @@ function onRouteSvgPointerMove(event) {
 
 function cancelDraftRouteEdge() {
   draftRouteEdge.value = null
+  draggingZonePointIndex.value = null
+  draggingZonePolygon.value = null
 }
 
 async function onRouteSvgPointerUp(event) {
+  if (draggingZonePolygon.value) {
+    draggingZonePolygon.value = null
+    return
+  }
+
+  if (draggingZonePointIndex.value !== null) {
+    draggingZonePointIndex.value = null
+    return
+  }
+
   const draft = draftRouteEdge.value
   if (!draft) return
   draftRouteEdge.value = null
@@ -1101,7 +1585,10 @@ function onPlanImageError(event) {
 
 async function loadInitialData() {
   try {
-    const response = await buildingsApi.getBuildings()
+    const [response] = await Promise.all([
+      buildingsApi.getBuildings(),
+      loadGuests(),
+    ])
     buildings.value = response.data
 
     if (!selectedBuildingId.value && buildings.value.length > 0) {
@@ -1137,6 +1624,8 @@ async function loadFloorContext() {
     mappedCameras.value = []
     activeCameraId.value = null
     clearRouteGraphState()
+    clearCameraZonesState()
+    clearGuestRoute()
     return
   }
 
@@ -1156,13 +1645,16 @@ async function loadFloorContext() {
       activeCameraId.value = null
     }
     planVersion.value = Date.now()
-    await loadRouteGraph()
+    await Promise.all([loadRouteGraph(), loadCameraZones()])
+    clearGuestRoute()
     await nextTick()
     updatePlanImageMetrics()
   } catch (error) {
     mappedCameras.value = []
     activeCameraId.value = null
     clearRouteGraphState()
+    clearCameraZonesState()
+    clearGuestRoute()
     ui.error(ui.getErrorMessage(error, 'Не удалось загрузить данные этажа'))
   }
 }
@@ -1283,6 +1775,8 @@ watch(selectedBuildingId, async (newValue) => {
   activeCameraId.value = null
   mappedCameras.value = []
   clearRouteGraphState()
+  clearCameraZonesState()
+  clearGuestRoute()
   floors.value = []
   selectedFloorId.value = ''
   if (!newValue) return
@@ -1295,6 +1789,8 @@ watch(selectedFloorId, async (newValue) => {
   if (!newValue) {
     mappedCameras.value = []
     clearRouteGraphState()
+    clearCameraZonesState()
+    clearGuestRoute()
     return
   }
   await loadFloorContext()
@@ -1368,10 +1864,21 @@ onBeforeUnmount(() => {
 .route-graph-layer { position: absolute; z-index: 1; overflow: visible; touch-action: none; }
 .route-graph-layer.is-markup-mode { cursor: crosshair; }
 .route-graph-layer.is-path-mode { cursor: default; }
+.route-graph-layer.is-zone-mode { cursor: crosshair; }
+.camera-zone-polygon { fill: rgba(14, 165, 233, 0.16); stroke: rgba(2, 132, 199, 0.78); stroke-width: 3; cursor: pointer; }
+.camera-zone-polygon.selected { fill: rgba(16, 185, 129, 0.24); stroke: #059669; stroke-width: 4; }
+.camera-zone-polygon.draft { fill: rgba(245, 158, 11, 0.18); stroke: #f59e0b; stroke-dasharray: 8 6; }
+.camera-zone-polygon.guest-route-zone { fill: rgba(251, 113, 133, 0.22); stroke: #f43f5e; }
+.camera-zone-point { fill: #ffffff; stroke: #f97316; stroke-width: 4; cursor: grab; filter: drop-shadow(0 2px 4px rgba(15, 23, 42, 0.24)); }
+.camera-zone-point:active { cursor: grabbing; }
 .route-edge-line { stroke: #111827; stroke-width: 2.5; stroke-linecap: round; cursor: pointer; opacity: 0.82; }
 .route-edge-line:hover, .route-edge-line.selected { stroke: #f97316; stroke-width: 4; opacity: 1; }
 .route-edge-draft { stroke: #0891b2; stroke-width: 3; stroke-dasharray: 10 8; stroke-linecap: round; pointer-events: none; }
 .route-path-line { stroke: #ef4444; stroke-width: 8; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; filter: drop-shadow(0 2px 4px rgba(239, 68, 68, 0.35)); }
+.guest-probable-route-line { stroke: #7c3aed; stroke-width: 10; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; filter: drop-shadow(0 3px 6px rgba(124, 58, 237, 0.36)); }
+.guest-route-direction-arrow { fill: #7c3aed; }
+.guest-route-event-marker circle { fill: #111827; stroke: #ffffff; stroke-width: 4; filter: drop-shadow(0 3px 5px rgba(15, 23, 42, 0.3)); }
+.guest-route-event-marker text { fill: #ffffff; font-size: 16px; font-weight: 800; pointer-events: none; }
 .route-node { fill: #ffffff; stroke: #0891b2; stroke-width: 4; cursor: pointer; filter: drop-shadow(0 2px 4px rgba(15, 23, 42, 0.25)); }
 .route-node:hover { fill: #cffafe; stroke: #0e7490; }
 .route-start-node { fill: #dcfce7; stroke: #16a34a; }
@@ -1383,6 +1890,7 @@ onBeforeUnmount(() => {
 .camera-pin.active-pin { background: #10b981; box-shadow: 0 0 0 5px rgba(16, 185, 129, 0.18); }
 .camera-tooltip { display: none; position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%); background: #0f172a; color: white; padding: 0.35rem 0.55rem; border-radius: 6px; font-size: 0.75rem; white-space: nowrap; }
 .camera-pin:hover .camera-tooltip { display: block; }
+.camera-zone-indicator { position: absolute; right: -2px; top: -2px; width: 10px; height: 10px; border-radius: 999px; background: #f97316; border: 2px solid #ffffff; }
 .pulse-ring { position: absolute; inset: -2px; border: 2px solid #10b981; border-radius: 50%; animation: pulse 1.5s infinite; }
 @keyframes pulse { 0% { transform: scale(1); opacity: 1; } 100% { transform: scale(2.4); opacity: 0; } }
 
@@ -1392,10 +1900,22 @@ onBeforeUnmount(() => {
 .logs-list { margin-top: 1rem; overflow-y: auto; display: flex; flex-direction: column; gap: 0.75rem; flex: 1; height: 0; padding-right: 0.5rem; }
 .camera-card { display: flex; gap: 0.8rem; align-items: center; padding: 0.8rem 0.9rem; border-radius: 8px; background: #f8fafc; border: 1px solid #e2e8f0; cursor: pointer; }
 .camera-card:hover { border-color: #bfdbfe; background: #eff6ff; }
+.camera-card.selected { border-color: #10b981; background: #ecfdf5; }
 .camera-card-icon { width: 34px; height: 34px; border-radius: 999px; background: #dbeafe; color: #2563eb; display: flex; align-items: center; justify-content: center; }
 .camera-card-name { color: #0f172a; font-weight: 700; }
 .camera-card-meta { margin-top: 0.2rem; color: #64748b; font-size: 0.82rem; }
+.camera-card-meta.zone-ready { color: #059669; font-weight: 700; }
 .empty-logs, .empty-selection { margin: auto 0; text-align: center; color: #94a3b8; }
+
+.side-panel { margin-top: 1rem; border-top: 1px solid #e2e8f0; padding-top: 1rem; }
+.side-panel h3 { margin: 0 0 0.65rem; color: #0f172a; font-size: 1rem; }
+.zone-editor-box { border: 1px solid #e2e8f0; border-radius: 10px; background: #f8fafc; padding: 0.85rem; }
+.zone-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.75rem; }
+.compact-form { margin-bottom: 0.65rem; }
+.camera-zone-warning { margin-top: 0.75rem; border: 1px solid #fde68a; border-radius: 8px; background: #fffbeb; color: #92400e; padding: 0.65rem; font-size: 0.82rem; line-height: 1.35; }
+.guest-route-events { display: flex; flex-direction: column; gap: 0.55rem; margin-top: 0.75rem; }
+.guest-route-event-row { display: flex; align-items: center; gap: 0.65rem; padding: 0.6rem; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; }
+.event-order { width: 26px; height: 26px; border-radius: 999px; background: #7c3aed; color: #ffffff; display: inline-flex; align-items: center; justify-content: center; font-weight: 800; font-size: 0.8rem; }
 
 .unassigned-section { margin-bottom: 1.5rem; }
 .unassigned-section h3 { font-size: 1.05rem; margin: 0 0 0.5rem 0; color: #0f172a; }
