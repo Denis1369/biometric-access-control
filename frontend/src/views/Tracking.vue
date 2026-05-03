@@ -975,6 +975,20 @@ function cancelEditMode() {
 
 async function savePlan() {
   if (!canEditPlan.value || !selectedFloorId.value) return
+  const hasZoneDraft = Boolean(zoneDraftCameraId.value && zoneDraftPoints.value.length)
+  if (hasZoneDraft && zoneDraftPoints.value.length !== 4) {
+    ui.warn('Зона видимости начата, но не завершена: поставьте 4 точки или нажмите «Сбросить».')
+    return
+  }
+
+  const zoneDraftToSave =
+    hasZoneDraft && !camerasToRemoveFromFloor.value.includes(zoneDraftCameraId.value)
+      ? {
+          cameraId: zoneDraftCameraId.value,
+          points: zoneDraftPoints.value.map((point) => ({ ...point })),
+        }
+      : null
+
   savingPlan.value = true
 
   try {
@@ -998,6 +1012,10 @@ async function savePlan() {
 
     await Promise.all([...updatePromises, ...removePromises])
 
+    if (zoneDraftToSave) {
+      await persistCameraZone(zoneDraftToSave.cameraId, zoneDraftToSave.points, { showSuccess: false })
+    }
+
     isEditMode.value = false
     activeCameraId.value = null
     draggingCameraId.value = null
@@ -1010,10 +1028,10 @@ async function savePlan() {
     await loadFloorContext()
     await loadUnassignedCameras()
 
-    ui.success('Положение камер успешно сохранено')
+    ui.success(zoneDraftToSave ? 'Положение камер и зона видимости сохранены' : 'Положение камер успешно сохранено')
   } catch (error) {
     console.error('Ошибка сохранения плана:', error.response?.data || error)
-    ui.error(ui.getErrorMessage(error, 'Не удалось сохранить позиции камер'))
+    ui.error(ui.getErrorMessage(error, 'Не удалось сохранить план камер или зону видимости'))
   } finally {
     savingPlan.value = false
   }
@@ -1160,29 +1178,38 @@ function resetActiveZoneDraft() {
   draggingZonePolygon.value = null
 }
 
+async function persistCameraZone(cameraId, points, { showSuccess = true } = {}) {
+  const response = await cameraVisibilityApi.saveCameraZone(cameraId, {
+    floor_id: Number(selectedFloorId.value),
+    points,
+  })
+  const nextZone = response.data
+  const existingIndex = cameraZones.value.findIndex((zone) => zone.camera_id === nextZone.camera_id)
+  if (existingIndex >= 0) {
+    cameraZones.value[existingIndex] = nextZone
+  } else {
+    cameraZones.value.push(nextZone)
+  }
+
+  if (zoneDraftCameraId.value === cameraId) {
+    zoneDraftPoints.value = []
+    zoneDraftCameraId.value = null
+    draggingZonePointIndex.value = null
+    draggingZonePolygon.value = null
+  }
+
+  clearGuestRoute()
+  if (showSuccess) ui.success('Зона видимости камеры сохранена')
+  return nextZone
+}
+
 async function saveActiveCameraZone() {
   if (!activeCamera.value || !selectedFloorId.value) return
   if (editableZonePoints.value.length !== 4) return ui.warn('Зона видимости должна содержать ровно 4 точки')
 
   zoneSaving.value = true
   try {
-    const response = await cameraVisibilityApi.saveCameraZone(activeCamera.value.id, {
-      floor_id: Number(selectedFloorId.value),
-      points: editableZonePoints.value,
-    })
-    const nextZone = response.data
-    const existingIndex = cameraZones.value.findIndex((zone) => zone.camera_id === nextZone.camera_id)
-    if (existingIndex >= 0) {
-      cameraZones.value[existingIndex] = nextZone
-    } else {
-      cameraZones.value.push(nextZone)
-    }
-    zoneDraftPoints.value = []
-    zoneDraftCameraId.value = null
-    draggingZonePointIndex.value = null
-    draggingZonePolygon.value = null
-    clearGuestRoute()
-    ui.success('Зона видимости камеры сохранена')
+    await persistCameraZone(activeCamera.value.id, editableZonePoints.value)
   } catch (error) {
     ui.error(ui.getErrorMessage(error, 'Не удалось сохранить зону видимости камеры'))
   } finally {
