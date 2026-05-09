@@ -7,6 +7,7 @@ from sqlmodel import Field, SQLModel, Session, select
 from app.core.database import get_session
 from app.core.deps import require_roles
 from app.models.buildings import Building
+from app.models.camera_visibility_zones import CameraVisibilityZone
 from app.models.cameras import Camera
 from app.models.floors import Floor
 from app.models.user import UserRole
@@ -289,6 +290,7 @@ def update_camera(
         )
 
     update_data = payload.model_dump(exclude_unset=True)
+    previous_floor_id = camera.floor_id
 
     if "building_id" in update_data or "floor_id" in update_data:
         next_building_id = update_data.get("building_id", camera.building_id)
@@ -326,6 +328,13 @@ def update_camera(
             setattr(camera, key, value)
 
     try:
+        if previous_floor_id != camera.floor_id:
+            old_zone = session.exec(
+                select(CameraVisibilityZone).where(CameraVisibilityZone.camera_id == camera.id)
+            ).first()
+            if old_zone:
+                session.delete(old_zone)
+
         session.add(camera)
         session.commit()
         session.refresh(camera)

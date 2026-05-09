@@ -7,6 +7,7 @@ from .employee_face_samples import EmployeeFaceSample
 from .buildings import Building
 from .floors import Floor
 from .guests import Guest, GuestFaceSample
+from .guest_route_analysis_jobs import GuestRouteAnalysisJob
 from .route_edges import RouteEdge
 from .route_nodes import RouteNode
 from .user import User, UserRole

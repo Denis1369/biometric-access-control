@@ -63,8 +63,40 @@ class Settings:
     reid_min_crop_width: int = int(os.getenv("REID_MIN_CROP_WIDTH", "48"))
     reid_min_crop_height: int = int(os.getenv("REID_MIN_CROP_HEIGHT", "96"))
     reid_min_area_ratio: float = float(os.getenv("REID_MIN_AREA_RATIO", "0.015"))
+    reid_min_body_aspect_ratio: float = float(
+        os.getenv("REID_MIN_BODY_ASPECT_RATIO", "1.55")
+    )
     reid_blur_threshold: float = float(os.getenv("REID_BLUR_THRESHOLD", "30.0"))
     reid_update_alpha: float = float(os.getenv("REID_UPDATE_ALPHA", "0.65"))
+    route_analysis_sample_interval_sec: float = float(
+        os.getenv("ROUTE_ANALYSIS_SAMPLE_INTERVAL_SEC", "2.0")
+    )
+    route_analysis_body_match_distance: float = float(
+        os.getenv("ROUTE_ANALYSIS_BODY_MATCH_DISTANCE", "0.56")
+    )
+    route_analysis_event_min_similarity: float = float(
+        os.getenv("ROUTE_ANALYSIS_EVENT_MIN_SIMILARITY", "0.68")
+    )
+    route_analysis_camera_time_offsets_raw: str = os.getenv(
+        "ROUTE_ANALYSIS_CAMERA_TIME_OFFSETS",
+        "UKSIVT Camera02=-25",
+    ).strip()
+    route_analysis_job_timeout_sec: float = float(
+        os.getenv("ROUTE_ANALYSIS_JOB_TIMEOUT_SEC", "1800")
+    )
+    guest_route_max_pixels_per_second: float = float(
+        os.getenv("GUEST_ROUTE_MAX_PIXELS_PER_SECOND", "120.0")
+    )
+    guest_route_max_event_gap_sec: float = float(
+        os.getenv("GUEST_ROUTE_MAX_EVENT_GAP_SEC", "120.0")
+    )
+    guest_route_min_event_confidence: float = float(
+        os.getenv("GUEST_ROUTE_MIN_EVENT_CONFIDENCE", "0.60")
+    )
+    guest_route_keep_latest_event_per_camera: bool = (
+        os.getenv("GUEST_ROUTE_KEEP_LATEST_EVENT_PER_CAMERA", "true").strip().lower()
+        == "true"
+    )
     analysis_trigger_enabled: bool = (
         os.getenv("ANALYSIS_TRIGGER_ENABLED", "true").strip().lower() == "true"
     )

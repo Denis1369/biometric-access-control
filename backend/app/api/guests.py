@@ -38,6 +38,16 @@ def _normalize_valid_until(value: datetime) -> datetime:
         return value
     return value.astimezone().replace(tzinfo=None)
 
+
+async def _read_upload_file(upload: UploadFile | None, empty_detail: str) -> tuple[bytes, str] | None:
+    if upload is None:
+        return None
+    payload = await upload.read()
+    if not payload:
+        raise HTTPException(status_code=400, detail=empty_detail)
+    return payload, upload.content_type or "image/jpeg"
+
+
 class GuestRead(SQLModel):
     id: int
     last_name: str
@@ -94,7 +104,9 @@ async def create_guest(
     middle_name: str | None = Form(None),
     employee_id: int = Form(...),
     valid_until: datetime = Form(...),
-    photo: UploadFile = File(...),
+    photo: UploadFile | None = File(None),
+    face_photo: UploadFile | None = File(None),
+    body_photo: UploadFile | None = File(None),
     session: Session = Depends(get_session),
 ):
     valid_until = _normalize_valid_until(valid_until)
@@ -123,25 +135,52 @@ async def create_guest(
         session.add(guest)
         session.flush()
 
-        image_bytes = await photo.read()
-        if not image_bytes:
-            raise HTTPException(status_code=400, detail="Фотография пуста")
+        face_upload = face_photo or photo
+        explicit_face_upload = face_photo is not None
+        face_payload = await _read_upload_file(face_upload, "Фотография лица пуста")
+        body_payload = await _read_upload_file(body_photo, "Фотография полного роста пуста")
 
-        try:
-            face_vector = extract_face_encoding(image_bytes)
-        except ValueError:
-            face_vector = None
+        if face_payload is None and body_payload is None:
+            raise HTTPException(status_code=400, detail="Загрузите фото лица или фото полного роста")
 
-        if face_vector is not None:
-            sample = GuestFaceSample(
-                guest_id=guest.id,
-                mime_type=photo.content_type or "image/jpeg",
-                photo_data=image_bytes,
-                embedding=face_vector,
-            )
-            session.add(sample)
-        else:
-            body_vector = extract_primary_body_embedding_from_image_bytes(image_bytes)
+        face_vector = None
+        if face_payload is not None:
+            face_bytes, face_mime_type = face_payload
+            try:
+                face_vector = extract_face_encoding(face_bytes)
+            except ValueError:
+                face_vector = None
+
+            if face_vector is not None:
+                sample = GuestFaceSample(
+                    guest_id=guest.id,
+                    mime_type=face_mime_type,
+                    photo_data=face_bytes,
+                    embedding=face_vector,
+                )
+                session.add(sample)
+            elif explicit_face_upload or body_payload is not None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Не удалось распознать лицо на фото лица",
+                )
+
+        if body_payload is not None:
+            body_bytes, _body_mime_type = body_payload
+            body_vector = extract_primary_body_embedding_from_image_bytes(body_bytes)
+            if body_vector is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Не удалось извлечь Re-ID признаки. Загрузите фото человека в полный рост.",
+                )
+            guest.body_embedding = body_vector
+            guest.body_embedding_updated_at = datetime.now()
+            session.add(guest)
+        elif face_payload is not None and face_vector is None:
+            # Backward compatibility: old clients uploaded one field named "photo",
+            # which could be either a face photo or a full-body Re-ID enrollment image.
+            face_bytes, _face_mime_type = face_payload
+            body_vector = extract_primary_body_embedding_from_image_bytes(face_bytes)
             if body_vector is None:
                 raise HTTPException(
                     status_code=400,
@@ -166,6 +205,46 @@ async def create_guest(
         session.rollback()
         logger.exception("Не удалось создать гостя")
         raise HTTPException(status_code=500, detail="Не удалось создать гостя из-за внутренней ошибки")
+
+
+@router.post(
+    "/{guest_id}/body-photo",
+    response_model=GuestRead,
+    dependencies=[Depends(require_roles(*WRITE_ROLES))],
+)
+async def upload_guest_body_photo(
+    guest_id: int,
+    body_photo: UploadFile = File(...),
+    session: Session = Depends(get_session),
+):
+    guest = session.get(Guest, guest_id)
+    if not guest:
+        raise HTTPException(status_code=404, detail="Гость не найден")
+
+    body_payload = await _read_upload_file(body_photo, "Фотография полного роста пуста")
+    if body_payload is None:
+        raise HTTPException(status_code=400, detail="Загрузите фото полного роста")
+
+    body_bytes, _mime_type = body_payload
+    body_vector = extract_primary_body_embedding_from_image_bytes(body_bytes)
+    if body_vector is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Не удалось извлечь Re-ID признаки. Загрузите фото человека в полный рост.",
+        )
+
+    guest.body_embedding = body_vector
+    guest.body_embedding_updated_at = datetime.now()
+
+    try:
+        session.add(guest)
+        session.commit()
+        session.refresh(guest)
+        return build_guest_read(session, guest)
+    except Exception:
+        session.rollback()
+        logger.exception("Не удалось обновить body_embedding гостя")
+        raise HTTPException(status_code=500, detail="Не удалось обновить Re-ID фото гостя")
 
 
 @router.patch(

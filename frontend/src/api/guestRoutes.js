@@ -19,4 +19,12 @@ export const guestRoutesApi = {
   getGuestProbableRoute(floorId, guestId, params = {}) {
     return apiClient.get(`/floors/${floorId}/guests/${guestId}/probable-route${buildQuery(params)}`)
   },
+
+  createGuestRouteAnalysisJob(floorId, guestId) {
+    return apiClient.post(`/floors/${floorId}/guests/${guestId}/route-analysis-jobs`)
+  },
+
+  getGuestRouteAnalysisJob(jobId) {
+    return apiClient.get(`/guest-route-analysis-jobs/${jobId}`)
+  },
 }

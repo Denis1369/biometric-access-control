@@ -18,6 +18,14 @@ export const guestsApi = {
     })
   },
 
+  uploadBodyPhoto(id, formData) {
+    return apiClient.post(`/guests/${id}/body-photo`, formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data'
+      }
+    })
+  },
+
   deactivateGuest(id) {
     return apiClient.patch(`/guests/${id}/deactivate`)
   },

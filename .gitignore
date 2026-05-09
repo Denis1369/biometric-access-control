@@ -28,6 +28,7 @@ SAIVT-SoftBio/
 saivt-softbio.parts/
 saivt-softbio.tar.gz
 colab_io/
+test_video/
 
 # Модели машинного обучения (веса YOLO очень тяжелые)
 *.pt

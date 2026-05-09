@@ -37,6 +37,22 @@
           </div>
           <div class="card-actions">
             <button
+              v-if="guest.has_body_embedding"
+              class="btn-icon"
+              @click="openRouteDialog(guest)"
+              title="Построить маршрут гостя"
+            >
+              <i class="pi pi-map-marker"></i>
+            </button>
+            <button
+              v-else-if="canManageGuests && isPassValid(guest.valid_until, guest.is_active)"
+              class="btn-icon"
+              @click="openBodyPhotoDialog(guest)"
+              title="Добавить фото полного роста для Re-ID"
+            >
+              <i class="pi pi-id-card"></i>
+            </button>
+            <button
               v-if="canManageGuests && isPassValid(guest.valid_until, guest.is_active)"
               class="btn-icon warning"
               @click="deactivateGuest(guest.id)"
@@ -93,34 +109,52 @@
 
         <div class="modal-body-split">
           <div class="photo-column">
-            <div class="avatar-preview">
-              <img v-if="photoPreview" :src="photoPreview" class="avatar-img large" />
-              <div v-else class="avatar-placeholder large">
-                <i class="pi pi-camera"></i>
+            <div class="photo-upload-block">
+              <label class="photo-block-title">Фото лица</label>
+              <div class="avatar-preview">
+                <img v-if="facePhotoPreview" :src="facePhotoPreview" class="avatar-img large" />
+                <div v-else class="avatar-placeholder large">
+                  <i class="pi pi-camera"></i>
+                </div>
+              </div>
+
+              <div class="capture-controls">
+                <label class="control-label">Камера проходной:</label>
+                <select v-model="selectedCameraId" class="form-input">
+                  <option value="" disabled>Выберите камеру...</option>
+                  <option v-for="cam in activeCameras" :key="cam.id" :value="cam.id">
+                    {{ cam.name }}
+                  </option>
+                </select>
+
+                <button class="btn-primary full-width-btn" @click="takeSnapshot" :disabled="!selectedCameraId || isTakingSnapshot">
+                  <i class="pi" :class="isTakingSnapshot ? 'pi-spin pi-spinner' : 'pi-camera'"></i>
+                  Сделать снимок лица
+                </button>
+
+                <div class="divider"><span>ИЛИ</span></div>
+
+                <button class="btn-text upload-btn full-width-btn" @click="$refs.faceFileInput.click()">
+                  <i class="pi pi-upload"></i> Загрузить фото лица
+                </button>
+                <input type="file" accept="image/*" ref="faceFileInput" class="hidden-input" @change="onFaceFileSelected" />
               </div>
             </div>
 
-            <div class="capture-controls">
-              <label class="control-label">Камера проходной:</label>
-              <select v-model="selectedCameraId" class="form-input">
-                <option value="" disabled>Выберите камеру...</option>
-                <option v-for="cam in activeCameras" :key="cam.id" :value="cam.id">
-                  {{ cam.name }}
-                </option>
-              </select>
+            <div class="photo-upload-block">
+              <label class="photo-block-title">Фото полного роста для Re-ID</label>
+              <div class="avatar-preview body-preview">
+                <img v-if="bodyPhotoPreview" :src="bodyPhotoPreview" class="avatar-img large" />
+                <div v-else class="avatar-placeholder large">
+                  <i class="pi pi-id-card"></i>
+                </div>
+              </div>
 
-              <button class="btn-primary full-width-btn" @click="takeSnapshot" :disabled="!selectedCameraId || isTakingSnapshot">
-                <i class="pi" :class="isTakingSnapshot ? 'pi-spin pi-spinner' : 'pi-camera'"></i>
-                Сделать снимок
+              <button class="btn-text upload-btn full-width-btn" @click="$refs.bodyFileInput.click()">
+                <i class="pi pi-upload"></i> Загрузить полный рост
               </button>
-
-              <div class="divider"><span>ИЛИ</span></div>
-
-              <button class="btn-text upload-btn full-width-btn" @click="$refs.fileInput.click()">
-                <i class="pi pi-upload"></i> Загрузить с ПК
-              </button>
-              <input type="file" accept="image/*" ref="fileInput" class="hidden-input" @change="onFileSelected" />
-              <p class="capture-hint">Можно использовать фото лица или снимок человека в полный рост для Re-ID.</p>
+              <input type="file" accept="image/*" ref="bodyFileInput" class="hidden-input" @change="onBodyFileSelected" />
+              <p class="capture-hint">Это фото нужно, чтобы Re-ID отслеживал гостя по одежде и силуэту.</p>
             </div>
           </div>
 
@@ -196,14 +230,218 @@
         </div>
       </div>
     </div>
+
+    <div v-if="bodyPhotoDialogVisible" class="modal-overlay" @click.self="closeBodyPhotoDialog">
+      <div class="modal-content small-modal">
+        <div class="modal-header">
+          <h2>Фото полного роста для Re-ID</h2>
+          <button class="btn-icon close-btn" @click="closeBodyPhotoDialog">
+            <i class="pi pi-times"></i>
+          </button>
+        </div>
+
+        <p class="capture-hint">
+          Гость: {{ formatGuestName(bodyPhotoGuest) }}. Загрузите кадр, где человек виден в полный рост.
+        </p>
+        <div class="avatar-preview body-preview modal-preview">
+          <img v-if="bodyEnrollmentPreview" :src="bodyEnrollmentPreview" class="avatar-img large" />
+          <div v-else class="avatar-placeholder large">
+            <i class="pi pi-id-card"></i>
+          </div>
+        </div>
+        <button class="btn-text upload-btn full-width-btn" @click="$refs.bodyEnrollmentInput.click()">
+          <i class="pi pi-upload"></i> Выбрать фото полного роста
+        </button>
+        <input type="file" accept="image/*" ref="bodyEnrollmentInput" class="hidden-input" @change="onBodyEnrollmentFileSelected" />
+
+        <div class="modal-actions">
+          <button class="btn-text" @click="closeBodyPhotoDialog">Отмена</button>
+          <button class="btn-primary" :disabled="!bodyEnrollmentFile || bodyPhotoSaving" @click="saveGuestBodyPhoto">
+            {{ bodyPhotoSaving ? 'Сохранение...' : 'Сохранить Re-ID фото' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="routeDialogVisible" class="modal-overlay" @click.self="closeRouteDialog">
+      <div class="modal-content route-modal">
+        <div class="modal-header">
+          <h2>Маршрут гостя</h2>
+          <button class="btn-icon close-btn" @click="closeRouteDialog">
+            <i class="pi pi-times"></i>
+          </button>
+        </div>
+
+        <p class="capture-hint">
+          Гость: {{ formatGuestName(routeGuest) }}. Можно мгновенно построить маршрут по уже записанному журналу
+          или сначала проанализировать file-видео камер выбранного этажа.
+        </p>
+
+        <div class="route-dialog-layout">
+          <div class="route-controls-column">
+            <div class="form-group">
+              <label>Этаж <span class="required">*</span></label>
+              <select v-model="routeFloorId" class="form-input" :disabled="routeJobLoading" @change="onRouteFloorChange">
+                <option value="" disabled>Выберите этаж...</option>
+                <option v-for="floor in floorOptions" :key="floor.id" :value="String(floor.id)">
+                  {{ floor.label }}
+                </option>
+              </select>
+            </div>
+
+            <div class="route-time-grid">
+              <div class="form-group">
+                <label>Дата/время от</label>
+                <input v-model="routeTimeFrom" class="form-input" type="datetime-local" :disabled="routeJobLoading" />
+              </div>
+              <div class="form-group">
+                <label>Дата/время до</label>
+                <input v-model="routeTimeTo" class="form-input" type="datetime-local" :disabled="routeJobLoading" />
+              </div>
+            </div>
+
+            <div v-if="routeJob" class="route-job-status">
+              <div><b>Статус:</b> {{ formatRouteJobStatus(routeJob.status) }}</div>
+              <div><b>Обработано камер:</b> {{ routeJob.processed_cameras }} из {{ routeJob.total_cameras ?? '—' }}</div>
+              <div><b>Событий найдено:</b> {{ routeJob.events_written }}</div>
+              <div v-if="routeJob.status === 'processing' && routeJob.processed_cameras === 0" class="job-note">
+                Первая камера ещё обрабатывается. Счётчик увеличится после завершения анализа этой камеры.
+              </div>
+              <div v-if="routeJob.error_message" class="job-error">{{ routeJob.error_message }}</div>
+              <div v-if="routeJobWarnings.length" class="job-warnings">
+                <div v-for="warning in routeJobWarnings" :key="warning">{{ warning }}</div>
+              </div>
+            </div>
+
+            <div v-if="routeWarnings.length" class="job-warnings route-result-warnings">
+              <div v-for="warning in routeWarnings" :key="warning">{{ warning }}</div>
+            </div>
+
+            <div class="route-events-panel">
+              <div class="route-events-title">
+                <span>События маршрута</span>
+                <strong>{{ routeEvents.length }}</strong>
+              </div>
+              <div v-if="routeEvents.length" class="route-events-list">
+                <div
+                  v-for="(event, index) in routeEvents"
+                  :key="`${event.source}-${event.tracking_log_id || event.access_log_id || index}`"
+                  class="route-event-row"
+                >
+                  <span class="route-event-order">{{ index + 1 }}</span>
+                  <div>
+                    <div class="route-event-camera">{{ event.camera_name || `Камера ${event.camera_id}` }}</div>
+                    <div class="route-event-time">{{ formatTimestamp(event.timestamp) }}</div>
+                  </div>
+                </div>
+              </div>
+              <div v-else class="route-empty-message">
+                После построения здесь появятся камеры в порядке обнаружения гостя.
+              </div>
+            </div>
+          </div>
+
+          <div class="route-map-column">
+            <div class="route-map-header">
+              <div>
+                <strong>Вероятный маршрут</strong>
+                <span>Зоны камер и путь по размеченному графу</span>
+              </div>
+              <span v-if="routeResultLoading" class="route-map-status">Построение...</span>
+            </div>
+
+            <div class="route-plan-preview">
+              <img
+                v-if="routePlanUrl"
+                ref="routePlanImage"
+                :src="routePlanUrl"
+                alt="План этажа"
+                class="route-plan-image"
+                draggable="false"
+                @load="onRoutePlanImageLoad"
+              />
+              <svg
+                v-if="routePlanUrl"
+                class="route-plan-overlay"
+                :viewBox="routePlanViewBox"
+                preserveAspectRatio="xMidYMid meet"
+              >
+                <defs>
+                  <marker
+                    id="guest-route-modal-arrow"
+                    viewBox="0 0 10 10"
+                    refX="8"
+                    refY="5"
+                    markerWidth="12"
+                    markerHeight="12"
+                    markerUnits="userSpaceOnUse"
+                    orient="auto-start-reverse"
+                  >
+                    <path d="M 0 0 L 10 5 L 0 10 z" class="route-direction-arrow"></path>
+                  </marker>
+                </defs>
+
+                <polygon
+                  v-for="zone in routeCameraZones"
+                  :key="`route-zone-${zone.camera_id}`"
+                  class="route-camera-zone"
+                  :points="formatPolygonPoints(zone.points)"
+                />
+
+                <polyline
+                  v-if="routePolyline"
+                  class="route-result-line"
+                  :points="routePolyline"
+                  fill="none"
+                  vector-effect="non-scaling-stroke"
+                  marker-mid="url(#guest-route-modal-arrow)"
+                  marker-end="url(#guest-route-modal-arrow)"
+                />
+
+                <g
+                  v-for="marker in routeEventMarkers"
+                  :key="marker.id"
+                  class="route-event-marker"
+                >
+                  <circle :cx="marker.x" :cy="marker.y" :r="routeMarkerRadius" vector-effect="non-scaling-stroke" />
+                  <text :x="marker.x" :y="marker.y" text-anchor="middle" dominant-baseline="central">
+                    {{ marker.order }}
+                  </text>
+                </g>
+              </svg>
+              <div v-if="!routePlanUrl" class="route-plan-empty">
+                Для выбранного этажа не загружен план.
+              </div>
+              <div v-else-if="!routeResult && !routeResultLoading" class="route-plan-empty overlay-empty">
+                Нажмите «Построить по журналу» или «Проанализировать видео и построить».
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-actions">
+          <button class="btn-text" @click="closeRouteDialog">Отмена</button>
+          <button class="btn-text route-journal-btn" :disabled="!routeFloorId || routeJobLoading || routeResultLoading" @click="buildRouteFromJournal">
+            Построить по журналу
+          </button>
+          <button class="btn-primary" :disabled="!routeFloorId || routeJobLoading || routeResultLoading" @click="startGuestRouteAnalysis">
+            {{ routeJobLoading ? 'Анализ...' : 'Проанализировать видео и построить' }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onBeforeUnmount, onMounted, computed } from 'vue'
+import { buildingsApi } from '../api/buildings'
 import { guestsApi } from '../api/guests'
 import { camerasApi } from '../api/cameras'
 import { employeesApi } from '../api/employees'
+import { floorsApi } from '../api/floors'
+import { guestRoutesApi } from '../api/guestRoutes'
+import { formatPolygonPoints, polygonCentroid } from '../services/geometry'
 import { useAuth } from '../services/auth'
 import { useUi } from '../services/ui'
 
@@ -216,6 +454,8 @@ const canManageGuests = computed(() => auth.hasAnyRole('super_admin', 'checkpoin
 const guests = ref([])
 const cameras = ref([])
 const employees = ref([])
+const buildings = ref([])
+const floors = ref([])
 
 const searchQuery = ref('')
 const selectedStatus = ref('active')
@@ -227,8 +467,34 @@ const selectedCameraId = ref('')
 const employeeDropdownOpen = ref(false)
 const employeeSearchQuery = ref('')
 
-const fileInput = ref(null)
-const photoPreview = ref(null)
+const faceFileInput = ref(null)
+const bodyFileInput = ref(null)
+const facePhotoPreview = ref(null)
+const bodyPhotoPreview = ref(null)
+
+const bodyPhotoDialogVisible = ref(false)
+const bodyPhotoGuest = ref(null)
+const bodyEnrollmentInput = ref(null)
+const bodyEnrollmentFile = ref(null)
+const bodyEnrollmentPreview = ref(null)
+const bodyPhotoSaving = ref(false)
+
+const routeDialogVisible = ref(false)
+const routeGuest = ref(null)
+const routeFloorId = ref('')
+const routeJob = ref(null)
+const routeJobLoading = ref(false)
+const routeResultLoading = ref(false)
+const routeResult = ref(null)
+const routeTimeFrom = ref('')
+const routeTimeTo = ref('')
+const routePlanImage = ref(null)
+const routePlanVersion = ref(Date.now())
+const routePlanMetrics = ref({
+  naturalWidth: 1,
+  naturalHeight: 1,
+})
+let routeJobPollTimer = null
 
 const guestForm = ref({
   last_name: '',
@@ -236,7 +502,8 @@ const guestForm = ref({
   middle_name: '',
   employee_id: '',
   valid_until: '',
-  photoFile: null
+  facePhotoFile: null,
+  bodyPhotoFile: null,
 })
 
 const parseLocalDate = (dateString) => {
@@ -246,15 +513,19 @@ const parseLocalDate = (dateString) => {
 
 const loadData = async () => {
   try {
-    const [camerasRes, guestsRes, employeesRes] = await Promise.all([
+    const [camerasRes, guestsRes, employeesRes, buildingsRes, floorsRes] = await Promise.all([
       camerasApi.getCameras(),
       guestsApi.getGuests(),
-      employeesApi.getEmployees(0, 1000)
+      employeesApi.getEmployees(0, 1000),
+      buildingsApi.getBuildings(),
+      floorsApi.getFloors(),
     ])
 
     cameras.value = camerasRes.data
     guests.value = guestsRes.data
     employees.value = employeesRes.data.filter(employee => employee.is_active)
+    buildings.value = buildingsRes.data
+    floors.value = floorsRes.data
   } catch (error) {
     console.error('Ошибка загрузки данных:', error)
   }
@@ -272,6 +543,70 @@ const selectedEmployeeName = computed(() => {
   const employee = employees.value.find(item => String(item.id) === String(guestForm.value.employee_id))
   return employee ? getEmployeeFullName(employee) : ''
 })
+
+const floorOptions = computed(() => {
+  const buildingById = new Map(buildings.value.map(building => [building.id, building]))
+  return floors.value.map(floor => {
+    const buildingName = buildingById.get(floor.building_id)?.name || `Здание ${floor.building_id}`
+    return {
+      ...floor,
+      label: `${buildingName} · ${floor.name} (${floor.floor_number} этаж)`,
+    }
+  })
+})
+
+const selectedRouteFloor = computed(() =>
+  floors.value.find(floor => String(floor.id) === String(routeFloorId.value)) || null
+)
+
+const routePlanUrl = computed(() => {
+  if (!selectedRouteFloor.value?.has_plan || !routeFloorId.value) return ''
+  const baseUrl = floorsApi.getFloorPlanUrl(routeFloorId.value)
+  const separator = baseUrl.includes('?') ? '&' : '?'
+  return `${baseUrl}${separator}v=${routePlanVersion.value}`
+})
+
+const routePlanViewBox = computed(() => {
+  const { naturalWidth, naturalHeight } = routePlanMetrics.value
+  return `0 0 ${naturalWidth || 1} ${naturalHeight || 1}`
+})
+
+const routePolyline = computed(() =>
+  (routeResult.value?.route_nodes || []).map(node => `${node.x},${node.y}`).join(' ')
+)
+
+const routeCameraZones = computed(() => routeResult.value?.camera_zones || [])
+const routeEvents = computed(() => routeResult.value?.events || [])
+const routeWarnings = computed(() => routeResult.value?.warnings || [])
+const routeJobWarnings = computed(() => {
+  const warnings = routeJob.value?.warnings || []
+  const routeWarningSet = new Set(routeWarnings.value)
+  return warnings.filter(warning => !routeWarningSet.has(warning))
+})
+const routeMarkerRadius = computed(() => Math.max(9, routePlanMetrics.value.naturalWidth / 115))
+
+const routeEventMarkers = computed(() =>
+  routeEvents.value
+    .map((event, index) => {
+      if (event.route_anchor) {
+        return {
+          x: event.route_anchor.x,
+          y: event.route_anchor.y,
+          id: `${event.source}-${event.tracking_log_id || event.access_log_id || index}`,
+          order: index + 1,
+        }
+      }
+
+      const zone = routeCameraZones.value.find(item => item.camera_id === event.camera_id)
+      if (!zone?.points?.length) return null
+      return {
+        ...polygonCentroid(zone.points),
+        id: `${event.source}-${event.tracking_log_id || event.access_log_id || index}`,
+        order: index + 1,
+      }
+    })
+    .filter(Boolean)
+)
 
 const filteredEmployeeOptions = computed(() => {
   const query = employeeSearchQuery.value.trim().toLowerCase()
@@ -338,12 +673,33 @@ const selectEmployee = (employee) => {
   employeeSearchQuery.value = ''
 }
 
-const onFileSelected = (event) => {
+const formatGuestName = (guest) => {
+  if (!guest) return ''
+  return [guest.last_name, guest.first_name, guest.middle_name].filter(Boolean).join(' ')
+}
+
+const revokePreview = (previewRef) => {
+  if (previewRef.value) {
+    URL.revokeObjectURL(previewRef.value)
+    previewRef.value = null
+  }
+}
+
+const onFaceFileSelected = (event) => {
   const file = event.target.files[0]
   if (file) {
-    guestForm.value.photoFile = file
-    if (photoPreview.value) URL.revokeObjectURL(photoPreview.value)
-    photoPreview.value = URL.createObjectURL(file)
+    guestForm.value.facePhotoFile = file
+    revokePreview(facePhotoPreview)
+    facePhotoPreview.value = URL.createObjectURL(file)
+  }
+}
+
+const onBodyFileSelected = (event) => {
+  const file = event.target.files[0]
+  if (file) {
+    guestForm.value.bodyPhotoFile = file
+    revokePreview(bodyPhotoPreview)
+    bodyPhotoPreview.value = URL.createObjectURL(file)
   }
 }
 
@@ -353,11 +709,11 @@ const takeSnapshot = async () => {
   try {
     const res = await camerasApi.getSnapshot(selectedCameraId.value)
     const blob = res.data
-    const file = new File([blob], 'snapshot.jpg', { type: 'image/jpeg' })
-    guestForm.value.photoFile = file
+    const file = new File([blob], 'face_snapshot.jpg', { type: 'image/jpeg' })
+    guestForm.value.facePhotoFile = file
 
-    if (photoPreview.value) URL.revokeObjectURL(photoPreview.value)
-    photoPreview.value = URL.createObjectURL(blob)
+    revokePreview(facePhotoPreview)
+    facePhotoPreview.value = URL.createObjectURL(blob)
   } catch (error) {
     ui.error(ui.getErrorMessage(error, 'Не удалось сделать снимок. Камера недоступна или в кадре нет людей.'))
   } finally {
@@ -367,11 +723,10 @@ const takeSnapshot = async () => {
 
 const openNewDialog = () => {
   if (!canManageGuests.value) return
-  if (photoPreview.value) {
-    URL.revokeObjectURL(photoPreview.value)
-    photoPreview.value = null
-  }
-  if (fileInput.value) fileInput.value.value = ''
+  revokePreview(facePhotoPreview)
+  revokePreview(bodyPhotoPreview)
+  if (faceFileInput.value) faceFileInput.value.value = ''
+  if (bodyFileInput.value) bodyFileInput.value.value = ''
 
   const today = new Date()
   today.setHours(23, 59, 0, 0)
@@ -384,7 +739,8 @@ const openNewDialog = () => {
     middle_name: '',
     employee_id: '',
     valid_until: localISOTime,
-    photoFile: null
+    facePhotoFile: null,
+    bodyPhotoFile: null,
   }
   employeeDropdownOpen.value = false
   employeeSearchQuery.value = ''
@@ -395,10 +751,8 @@ const closeDialog = () => {
   displayDialog.value = false
   employeeDropdownOpen.value = false
   employeeSearchQuery.value = ''
-  if (photoPreview.value) {
-    URL.revokeObjectURL(photoPreview.value)
-    photoPreview.value = null
-  }
+  revokePreview(facePhotoPreview)
+  revokePreview(bodyPhotoPreview)
 }
 
 const saveGuest = async () => {
@@ -407,8 +761,8 @@ const saveGuest = async () => {
     ui.warn('Заполните обязательные поля: фамилия, имя, к кому пришли и срок действия')
     return
   }
-  if (!guestForm.value.photoFile) {
-    ui.warn('Сделайте снимок с камеры или загрузите фото лица/полного роста гостя.')
+  if (!guestForm.value.facePhotoFile) {
+    ui.warn('Сделайте снимок лица с камеры или загрузите фото лица гостя.')
     return
   }
 
@@ -420,7 +774,8 @@ const saveGuest = async () => {
     formData.append('employee_id', guestForm.value.employee_id)
 
     formData.append('valid_until', guestForm.value.valid_until)
-    formData.append('photo', guestForm.value.photoFile)
+    formData.append('face_photo', guestForm.value.facePhotoFile)
+    if (guestForm.value.bodyPhotoFile) formData.append('body_photo', guestForm.value.bodyPhotoFile)
 
     await guestsApi.createGuest(formData)
     closeDialog()
@@ -428,6 +783,194 @@ const saveGuest = async () => {
     ui.success('Гостевой пропуск выдан')
   } catch (error) {
     ui.error(ui.getErrorMessage(error, 'Ошибка сохранения гостя'))
+  }
+}
+
+const openBodyPhotoDialog = (guest) => {
+  if (!canManageGuests.value) return
+  bodyPhotoGuest.value = guest
+  bodyEnrollmentFile.value = null
+  revokePreview(bodyEnrollmentPreview)
+  if (bodyEnrollmentInput.value) bodyEnrollmentInput.value.value = ''
+  bodyPhotoDialogVisible.value = true
+}
+
+const closeBodyPhotoDialog = () => {
+  bodyPhotoDialogVisible.value = false
+  bodyPhotoGuest.value = null
+  bodyEnrollmentFile.value = null
+  revokePreview(bodyEnrollmentPreview)
+}
+
+const onBodyEnrollmentFileSelected = (event) => {
+  const file = event.target.files[0]
+  if (!file) return
+  bodyEnrollmentFile.value = file
+  revokePreview(bodyEnrollmentPreview)
+  bodyEnrollmentPreview.value = URL.createObjectURL(file)
+}
+
+const saveGuestBodyPhoto = async () => {
+  if (!bodyPhotoGuest.value || !bodyEnrollmentFile.value) return
+  bodyPhotoSaving.value = true
+  try {
+    const formData = new FormData()
+    formData.append('body_photo', bodyEnrollmentFile.value)
+    await guestsApi.uploadBodyPhoto(bodyPhotoGuest.value.id, formData)
+    closeBodyPhotoDialog()
+    await loadData()
+    ui.success('Фото полного роста сохранено, Re-ID активен')
+  } catch (error) {
+    ui.error(ui.getErrorMessage(error, 'Не удалось сохранить фото полного роста'))
+  } finally {
+    bodyPhotoSaving.value = false
+  }
+}
+
+const formatRouteJobStatus = (status) => {
+  const labels = {
+    queued: 'в очереди',
+    processing: 'обработка',
+    completed: 'завершено',
+    failed: 'ошибка',
+  }
+  return labels[status] || status
+}
+
+const toDateTimeLocalValue = (value) => {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return String(value).slice(0, 16)
+  const offsetMs = date.getTimezoneOffset() * 60000
+  return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16)
+}
+
+const formatTimestamp = (value) => {
+  if (!value) return '—'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString('ru-RU')
+}
+
+const setDefaultRoutePeriod = () => {
+  const now = new Date()
+  const from = new Date(now.getTime() - 24 * 60 * 60 * 1000)
+  routeTimeFrom.value = toDateTimeLocalValue(from)
+  routeTimeTo.value = toDateTimeLocalValue(now)
+}
+
+const onRoutePlanImageLoad = () => {
+  if (!routePlanImage.value) return
+  routePlanMetrics.value = {
+    naturalWidth: routePlanImage.value.naturalWidth || 1,
+    naturalHeight: routePlanImage.value.naturalHeight || 1,
+  }
+}
+
+const onRouteFloorChange = () => {
+  routeResult.value = null
+  routeJob.value = null
+  routePlanVersion.value = Date.now()
+  routePlanMetrics.value = { naturalWidth: 1, naturalHeight: 1 }
+}
+
+const clearRouteJobPolling = () => {
+  if (routeJobPollTimer) {
+    clearInterval(routeJobPollTimer)
+    routeJobPollTimer = null
+  }
+}
+
+const openRouteDialog = (guest) => {
+  routeGuest.value = guest
+  routeJob.value = null
+  routeResult.value = null
+  routeResultLoading.value = false
+  routePlanVersion.value = Date.now()
+  routePlanMetrics.value = { naturalWidth: 1, naturalHeight: 1 }
+  setDefaultRoutePeriod()
+  routeFloorId.value = floorOptions.value[0]?.id ? String(floorOptions.value[0].id) : ''
+  routeDialogVisible.value = true
+}
+
+const closeRouteDialog = () => {
+  clearRouteJobPolling()
+  routeDialogVisible.value = false
+  routeGuest.value = null
+  routeJob.value = null
+  routeJobLoading.value = false
+  routeResultLoading.value = false
+  routeResult.value = null
+}
+
+const buildRouteFromJournal = async () => {
+  if (!routeGuest.value || !routeFloorId.value) return
+  routeResultLoading.value = true
+  try {
+    const response = await guestRoutesApi.getGuestProbableRoute(routeFloorId.value, routeGuest.value.id, {
+      time_from: routeTimeFrom.value,
+      time_to: routeTimeTo.value,
+    })
+    routeResult.value = response.data
+    routePlanVersion.value = Date.now()
+
+    if (!response.data.events?.length) {
+      ui.warn('За выбранный период событий не найдено')
+    } else if ((response.data.warnings || []).length) {
+      ui.warn('Маршрут построен с предупреждениями')
+    } else {
+      ui.success('Вероятный маршрут гостя построен')
+    }
+  } catch (error) {
+    routeResult.value = null
+    ui.error(ui.getErrorMessage(error, 'Не удалось построить маршрут гостя'))
+  } finally {
+    routeResultLoading.value = false
+  }
+}
+
+const buildRouteForCompletedJob = async (job) => {
+  routeFloorId.value = String(job.floor_id)
+  routeTimeFrom.value = toDateTimeLocalValue(job.time_from)
+  routeTimeTo.value = toDateTimeLocalValue(job.time_to)
+  await buildRouteFromJournal()
+}
+
+const pollRouteJob = async (jobId) => {
+  const response = await guestRoutesApi.getGuestRouteAnalysisJob(jobId)
+  routeJob.value = response.data
+
+  if (response.data.status === 'completed') {
+    clearRouteJobPolling()
+    routeJobLoading.value = false
+    await buildRouteForCompletedJob(response.data)
+  } else if (response.data.status === 'failed') {
+    clearRouteJobPolling()
+    routeJobLoading.value = false
+    ui.error(response.data.error_message || 'Офлайн-анализ маршрута завершился с ошибкой')
+  }
+}
+
+const startGuestRouteAnalysis = async () => {
+  if (!routeGuest.value || !routeFloorId.value) return
+  routeJobLoading.value = true
+  routeJob.value = null
+  routeResult.value = null
+  clearRouteJobPolling()
+  try {
+    const response = await guestRoutesApi.createGuestRouteAnalysisJob(routeFloorId.value, routeGuest.value.id)
+    routeJob.value = response.data
+    routeJobPollTimer = setInterval(() => {
+      void pollRouteJob(response.data.id).catch((error) => {
+        clearRouteJobPolling()
+        routeJobLoading.value = false
+        ui.error(ui.getErrorMessage(error, 'Не удалось получить статус анализа маршрута'))
+      })
+    }, 2500)
+    await pollRouteJob(response.data.id)
+  } catch (error) {
+    routeJobLoading.value = false
+    ui.error(ui.getErrorMessage(error, 'Не удалось запустить анализ маршрута гостя'))
   }
 }
 
@@ -452,6 +995,13 @@ const deactivateGuest = async (id) => {
 
 onMounted(() => {
   loadData()
+})
+
+onBeforeUnmount(() => {
+  clearRouteJobPolling()
+  revokePreview(facePhotoPreview)
+  revokePreview(bodyPhotoPreview)
+  revokePreview(bodyEnrollmentPreview)
 })
 </script>
 
@@ -505,16 +1055,22 @@ onMounted(() => {
 .modal-overlay { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.6); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; z-index: 1000; }
 .modal-content { background: white; padding: 2rem; border-radius: 16px; width: 100%; max-height: 90vh; overflow-y: auto; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25); }
 .wide-modal { max-width: 850px; }
+.route-modal { max-width: min(1180px, calc(100vw - 2rem)); }
 
 .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; }
 .modal-header h2 { margin: 0; font-size: 1.3rem; color: #0f172a; }
 
 .modal-body-split { display: flex; gap: 2rem; align-items: flex-start; }
 
-.photo-column { width: 280px; flex-shrink: 0; display: flex; flex-direction: column; gap: 1.5rem; background: #f8fafc; padding: 1.5rem; border-radius: 12px; border: 1px solid #e2e8f0; }
+.photo-column { width: 280px; flex-shrink: 0; display: flex; flex-direction: column; gap: 1rem; background: #f8fafc; padding: 1.5rem; border-radius: 12px; border: 1px solid #e2e8f0; }
 .form-column { flex: 1; }
 
+.photo-upload-block { display: flex; flex-direction: column; gap: 0.75rem; padding: 0.9rem; border-radius: 12px; background: #ffffff; border: 1px solid #e2e8f0; }
+.photo-block-title { color: #334155; font-size: 0.9rem; font-weight: 700; }
 .avatar-preview { display: flex; justify-content: center; margin-bottom: 0.5rem; }
+.body-preview .avatar-img,
+.body-preview .avatar-placeholder { border-radius: 16px; }
+.modal-preview { width: 220px; margin: 1rem auto; }
 
 .capture-controls { display: flex; flex-direction: column; gap: 0.75rem; }
 .control-label { font-size: 0.85rem; font-weight: 600; color: #475569; }
@@ -527,6 +1083,39 @@ onMounted(() => {
 .upload-btn { border: 1px dashed #cbd5e1; }
 .hidden-input { display: none; }
 .capture-hint { margin: 0; color: #64748b; font-size: 0.8rem; line-height: 1.35; }
+.route-dialog-layout { display: grid; grid-template-columns: 360px minmax(0, 1fr); gap: 1.25rem; align-items: start; }
+.route-controls-column, .route-map-column { min-width: 0; }
+.route-time-grid { display: grid; grid-template-columns: 1fr; gap: 0.65rem; }
+.route-time-grid .form-group, .route-time-grid .form-input { min-width: 0; }
+.route-job-status { display: flex; flex-direction: column; gap: 0.45rem; padding: 0.9rem; border-radius: 12px; background: #f8fafc; border: 1px solid #e2e8f0; color: #334155; font-size: 0.9rem; }
+.job-note { color: #64748b; font-size: 0.82rem; }
+.job-error { color: #b91c1c; font-weight: 700; }
+.job-warnings { display: flex; flex-direction: column; gap: 0.25rem; padding: 0.6rem; border-radius: 10px; background: #fffbeb; border: 1px solid #fde68a; color: #92400e; }
+.route-result-warnings { margin-top: 0.75rem; }
+.route-events-panel { margin-top: 0.85rem; padding: 0.85rem; border-radius: 14px; background: #f8fafc; border: 1px solid #e2e8f0; }
+.route-events-title { display: flex; align-items: center; justify-content: space-between; color: #334155; font-size: 0.85rem; font-weight: 800; margin-bottom: 0.65rem; }
+.route-events-title strong { min-width: 28px; height: 24px; padding: 0 0.45rem; border-radius: 999px; background: #dbeafe; color: #1d4ed8; display: inline-flex; align-items: center; justify-content: center; }
+.route-events-list { display: flex; flex-direction: column; gap: 0.45rem; max-height: 230px; overflow-y: auto; padding-right: 0.25rem; }
+.route-event-row { display: flex; align-items: center; gap: 0.6rem; padding: 0.55rem; border-radius: 10px; background: #ffffff; border: 1px solid #e2e8f0; }
+.route-event-order { width: 26px; height: 26px; border-radius: 999px; background: #7c3aed; color: #ffffff; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; font-weight: 800; }
+.route-event-camera { color: #0f172a; font-size: 0.92rem; font-weight: 800; }
+.route-event-time { margin-top: 0.15rem; color: #64748b; font-size: 0.82rem; }
+.route-empty-message { color: #94a3b8; font-size: 0.85rem; line-height: 1.35; }
+.route-map-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 0.75rem; }
+.route-map-header div { display: flex; flex-direction: column; gap: 0.15rem; }
+.route-map-header strong { color: #0f172a; font-size: 1rem; }
+.route-map-header span { color: #64748b; font-size: 0.82rem; }
+.route-map-status { padding: 0.25rem 0.55rem; border-radius: 999px; background: #eef2ff; color: #4338ca; font-weight: 800; font-size: 0.75rem; }
+.route-plan-preview { position: relative; min-height: 500px; border-radius: 16px; background: #f8fafc; border: 1px solid #e2e8f0; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+.route-plan-image { width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
+.route-plan-overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.route-camera-zone { fill: rgba(14, 165, 233, 0.16); stroke: rgba(2, 132, 199, 0.78); stroke-width: 3; }
+.route-result-line { stroke: #7c3aed; stroke-width: 8; stroke-linecap: round; stroke-linejoin: round; filter: drop-shadow(0 3px 6px rgba(124, 58, 237, 0.36)); }
+.route-direction-arrow { fill: #7c3aed; }
+.route-event-marker circle { fill: #111827; stroke: #ffffff; stroke-width: 4; filter: drop-shadow(0 3px 5px rgba(15, 23, 42, 0.3)); }
+.route-event-marker text { fill: #ffffff; font-size: 16px; font-weight: 800; pointer-events: none; }
+.route-plan-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 1rem; color: #94a3b8; font-weight: 700; background: #f8fafc; }
+.overlay-empty { background: rgba(248, 250, 252, 0.68); }
 
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; }
 .form-group { display: flex; flex-direction: column; gap: 0.4rem; }
@@ -631,6 +1220,7 @@ onMounted(() => {
 .btn-primary:disabled { background: #94a3b8; cursor: not-allowed; }
 .btn-text { background: transparent; color: #64748b; }
 .btn-text:hover { background: #f1f5f9; color: #0f172a; }
+.route-journal-btn { border: 1px solid #cbd5e1; color: #334155; }
 
 .btn-icon { background: transparent; border: none; cursor: pointer; width: 32px; height: 32px; border-radius: 6px; color: #64748b; display: flex; align-items: center; justify-content: center; transition: 0.2s; }
 .btn-icon:hover { background: #f1f5f9; color: #0f172a; }
@@ -639,6 +1229,8 @@ onMounted(() => {
 
 @media (max-width: 768px) {
   .modal-body-split { flex-direction: column; }
+  .route-dialog-layout, .route-time-grid { grid-template-columns: 1fr; }
+  .route-plan-preview { min-height: 340px; }
   .photo-column { width: 100%; box-sizing: border-box; }
   .form-grid { grid-template-columns: 1fr; }
 }

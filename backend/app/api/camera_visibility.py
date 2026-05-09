@@ -82,7 +82,11 @@ def get_floor_camera_zones(floor_id: int, session: Session = Depends(get_session
 
     zones = session.exec(
         select(CameraVisibilityZone)
-        .where(CameraVisibilityZone.floor_id == floor_id)
+        .join(Camera, CameraVisibilityZone.camera_id == Camera.id)
+        .where(
+            CameraVisibilityZone.floor_id == floor_id,
+            Camera.floor_id == floor_id,
+        )
         .order_by(CameraVisibilityZone.camera_id.asc())
     ).all()
     return FloorCameraZonesRead(zones=[_zone_to_read(zone) for zone in zones])
@@ -105,6 +109,8 @@ def get_camera_zone(camera_id: int, session: Session = Depends(get_session)):
     zone = session.exec(
         select(CameraVisibilityZone).where(CameraVisibilityZone.camera_id == camera_id)
     ).first()
+    if zone and camera.floor_id != zone.floor_id:
+        return None
     return _zone_to_read(zone) if zone else None
 
 

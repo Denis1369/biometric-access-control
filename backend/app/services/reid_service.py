@@ -312,6 +312,8 @@ def _validate_crop(
     crop_bgr: np.ndarray,
     bbox: tuple[int, int, int, int],
     frame_shape: tuple[int, int, int],
+    *,
+    min_body_aspect_ratio: float = 1.0,
 ) -> float:
     crop_h, crop_w = crop_bgr.shape[:2]
     if crop_w < settings.reid_min_crop_width or crop_h < settings.reid_min_crop_height:
@@ -321,7 +323,8 @@ def _validate_crop(
     if frame_area <= 0 or (_bbox_area(bbox) / frame_area) < settings.reid_min_area_ratio:
         raise ValueError("силуэт занимает слишком мало площади кадра")
 
-    if crop_h <= crop_w:
+    body_aspect_ratio = crop_h / max(crop_w, 1)
+    if body_aspect_ratio < min_body_aspect_ratio:
         raise ValueError("силуэт слишком сильно обрезан по высоте")
 
     gray = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
@@ -405,7 +408,11 @@ def detect_person_presence(
     return detections
 
 
-def extract_body_detections(frame_bgr: np.ndarray) -> list[BodyDetection]:
+def extract_body_detections(
+    frame_bgr: np.ndarray,
+    *,
+    min_body_aspect_ratio: float = 1.0,
+) -> list[BodyDetection]:
     if frame_bgr is None or frame_bgr.size == 0:
         return []
 
@@ -423,7 +430,12 @@ def extract_body_detections(frame_bgr: np.ndarray) -> list[BodyDetection]:
         x1, y1, x2, y2 = bbox
         crop_bgr = frame_bgr[y1:y2, x1:x2]
         try:
-            blur_score = _validate_crop(crop_bgr, bbox, frame_bgr.shape)
+            blur_score = _validate_crop(
+                crop_bgr,
+                bbox,
+                frame_bgr.shape,
+                min_body_aspect_ratio=min_body_aspect_ratio,
+            )
         except ValueError as exc:
             logger.debug("Re-ID пропускает bbox=%s: %s", bbox, exc)
             continue
@@ -461,6 +473,7 @@ def extract_body_embedding_from_crop(
     crop_bgr: np.ndarray,
     *,
     validate_crop: bool = True,
+    min_body_aspect_ratio: float | None = None,
 ) -> list[float] | None:
     """Build a Re-ID embedding from an already cropped person image.
 
@@ -476,7 +489,16 @@ def extract_body_embedding_from_crop(
     crop_h, crop_w = crop_bgr.shape[:2]
     if validate_crop:
         try:
-            _validate_crop(crop_bgr, (0, 0, crop_w, crop_h), crop_bgr.shape)
+            _validate_crop(
+                crop_bgr,
+                (0, 0, crop_w, crop_h),
+                crop_bgr.shape,
+                min_body_aspect_ratio=(
+                    settings.reid_min_body_aspect_ratio
+                    if min_body_aspect_ratio is None
+                    else min_body_aspect_ratio
+                ),
+            )
         except ValueError as exc:
             logger.debug("Re-ID enrollment crop rejected: %s", exc)
             return None
@@ -524,13 +546,15 @@ def extract_primary_body_embedding_from_image_bytes(
     if frame_bgr is None:
         return None
 
-    crop_embedding = extract_body_embedding_from_crop(frame_bgr)
-    if crop_embedding is not None:
-        return crop_embedding
-
-    detections = extract_body_detections(frame_bgr)
+    detections = extract_body_detections(
+        frame_bgr,
+        min_body_aspect_ratio=settings.reid_min_body_aspect_ratio,
+    )
     if not detections:
-        return None
+        return extract_body_embedding_from_crop(
+            frame_bgr,
+            min_body_aspect_ratio=settings.reid_min_body_aspect_ratio,
+        )
 
     # Detections are sorted by person bbox area/confidence in _detect_person_boxes.
     return detections[0].embedding

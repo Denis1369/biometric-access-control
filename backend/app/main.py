@@ -16,6 +16,7 @@ from app.api import (
     departments,
     employees,
     floors,
+    guest_route_analysis,
     guest_routes,
     guests,
     job_positions,
@@ -27,6 +28,7 @@ from app.api import (
 from app.core.config import settings
 from app.core.database import engine
 from app.core.seed import ensure_demo_data
+from app.services.guest_route_analysis_service import fail_interrupted_route_analysis_jobs
 from app.services.stream_manager import stream_manager
 
 logging.basicConfig(
@@ -71,6 +73,13 @@ async def lifespan(app: FastAPI):
         if seeded:
             logger.info("Пустая база обнаружена, демоданные добавлены автоматически.")
 
+    interrupted_jobs = fail_interrupted_route_analysis_jobs()
+    if interrupted_jobs:
+        logger.warning(
+            "Помечены как прерванные незавершённые offline route jobs: %s",
+            interrupted_jobs,
+        )
+
     logger.info("Запуск фонового анализа видеопотоков...")
     stream_manager.start_all()
     
@@ -104,6 +113,7 @@ app.include_router(analytics.router)
 app.include_router(buildings.router)
 app.include_router(floors.router)
 app.include_router(route_graph.router)
+app.include_router(guest_route_analysis.router)
 app.include_router(guest_routes.router)
 app.include_router(guests.router)
 app.include_router(users.router)
