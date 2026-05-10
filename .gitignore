@@ -71,3 +71,31 @@ yarn-error.log*
 Thumbs.db
 
 storage
+
+# Playwright
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+/playwright/.auth/
+
+# ── GSD baseline (auto-generated) ──
+.gsd
+.gsd-id
+.mcp.json
+.bg-shell/
+*.swp
+*.swo
+*~
+*.code-workspace
+.next/
+build/
+*.pyc
+target/
+vendor/
+*.log
+coverage/
+.cache/
+tmp/
+.agents
+skills-lock.json

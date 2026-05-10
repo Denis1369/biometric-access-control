@@ -18,7 +18,7 @@ class RouteGraphError(ValueError):
 
 
 class RouteNotFoundError(RouteGraphError):
-    pass
+    """Raised when the graph is valid, but no path connects the requested nodes."""
 
 
 @dataclass(frozen=True)

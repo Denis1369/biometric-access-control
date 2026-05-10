@@ -10,6 +10,10 @@ pymysql
 # Environment
 python-dotenv
 
+# Security
+python-jose[cryptography]
+passlib[bcrypt]
+
 # Computer Vision & ML
 opencv-python
 ultralytics
@@ -19,5 +23,7 @@ pillow
 torch
 torchvision
 torchreid
+insightface
+onnxruntime
 gdown
 tensorboard

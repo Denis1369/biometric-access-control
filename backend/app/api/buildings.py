@@ -17,10 +17,10 @@ router = APIRouter(prefix="/api/buildings", tags=["Здания"])
 READ_ROLES = (
     UserRole.SUPER_ADMIN,
     UserRole.CHECKPOINT_OPERATOR,
-    )
+)
 WRITE_ROLES = (
     UserRole.SUPER_ADMIN,
-    )
+)
 
 
 class BuildingCreate(SQLModel):

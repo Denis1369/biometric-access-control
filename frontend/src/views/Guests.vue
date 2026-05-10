@@ -37,7 +37,6 @@
           </div>
           <div class="card-actions">
             <button
-              v-if="guest.has_body_embedding"
               class="btn-icon"
               @click="openRouteDialog(guest)"
               title="Построить маршрут гостя"
@@ -45,7 +44,7 @@
               <i class="pi pi-map-marker"></i>
             </button>
             <button
-              v-else-if="canManageGuests && isPassValid(guest.valid_until, guest.is_active)"
+              v-if="canManageGuests && !guest.has_body_embedding"
               class="btn-icon"
               @click="openBodyPhotoDialog(guest)"
               title="Добавить фото полного роста для Re-ID"
@@ -289,14 +288,27 @@
               </select>
             </div>
 
-            <div class="route-time-grid">
-              <div class="form-group">
-                <label>Дата/время от</label>
-                <input v-model="routeTimeFrom" class="form-input" type="datetime-local" :disabled="routeJobLoading" />
+            <div class="route-period-card">
+              <div class="route-period-title">Период поиска</div>
+              <div class="route-period-row">
+                <div class="form-group">
+                  <label>Дата от</label>
+                  <input v-model="routeDateFrom" class="form-input" type="date" :disabled="routeJobLoading" />
+                </div>
+                <div class="form-group time-field">
+                  <label>Время от</label>
+                  <input v-model="routeClockFrom" class="form-input" type="time" :disabled="routeJobLoading" />
+                </div>
               </div>
-              <div class="form-group">
-                <label>Дата/время до</label>
-                <input v-model="routeTimeTo" class="form-input" type="datetime-local" :disabled="routeJobLoading" />
+              <div class="route-period-row">
+                <div class="form-group">
+                  <label>Дата до</label>
+                  <input v-model="routeDateTo" class="form-input" type="date" :disabled="routeJobLoading" />
+                </div>
+                <div class="form-group time-field">
+                  <label>Время до</label>
+                  <input v-model="routeClockTo" class="form-input" type="time" :disabled="routeJobLoading" />
+                </div>
               </div>
             </div>
 
@@ -486,8 +498,10 @@ const routeJob = ref(null)
 const routeJobLoading = ref(false)
 const routeResultLoading = ref(false)
 const routeResult = ref(null)
-const routeTimeFrom = ref('')
-const routeTimeTo = ref('')
+const routeDateFrom = ref('')
+const routeClockFrom = ref('')
+const routeDateTo = ref('')
+const routeClockTo = ref('')
 const routePlanImage = ref(null)
 const routePlanVersion = ref(Date.now())
 const routePlanMetrics = ref({
@@ -527,7 +541,7 @@ const loadData = async () => {
     buildings.value = buildingsRes.data
     floors.value = floorsRes.data
   } catch (error) {
-    console.error('Ошибка загрузки данных:', error)
+    ui.error(ui.getErrorMessage(error, 'Не удалось загрузить данные для гостевых пропусков'))
   }
 }
 
@@ -845,6 +859,24 @@ const toDateTimeLocalValue = (value) => {
   return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16)
 }
 
+const splitDateTimeLocalValue = (value) => {
+  const normalized = toDateTimeLocalValue(value)
+  return {
+    date: normalized.slice(0, 10),
+    time: normalized.slice(11, 16),
+  }
+}
+
+const combineRouteDateTime = (dateValue, timeValue, fallbackTime) => {
+  if (!dateValue) return ''
+  return `${dateValue}T${timeValue || fallbackTime}`
+}
+
+const getRoutePeriodParams = () => ({
+  time_from: combineRouteDateTime(routeDateFrom.value, routeClockFrom.value, '00:00'),
+  time_to: combineRouteDateTime(routeDateTo.value, routeClockTo.value, '23:59'),
+})
+
 const formatTimestamp = (value) => {
   if (!value) return '—'
   const date = new Date(value)
@@ -855,8 +887,12 @@ const formatTimestamp = (value) => {
 const setDefaultRoutePeriod = () => {
   const now = new Date()
   const from = new Date(now.getTime() - 24 * 60 * 60 * 1000)
-  routeTimeFrom.value = toDateTimeLocalValue(from)
-  routeTimeTo.value = toDateTimeLocalValue(now)
+  const fromParts = splitDateTimeLocalValue(from)
+  const toParts = splitDateTimeLocalValue(now)
+  routeDateFrom.value = fromParts.date
+  routeClockFrom.value = fromParts.time
+  routeDateTo.value = toParts.date
+  routeClockTo.value = toParts.time
 }
 
 const onRoutePlanImageLoad = () => {
@@ -908,8 +944,7 @@ const buildRouteFromJournal = async () => {
   routeResultLoading.value = true
   try {
     const response = await guestRoutesApi.getGuestProbableRoute(routeFloorId.value, routeGuest.value.id, {
-      time_from: routeTimeFrom.value,
-      time_to: routeTimeTo.value,
+      ...getRoutePeriodParams(),
     })
     routeResult.value = response.data
     routePlanVersion.value = Date.now()
@@ -931,8 +966,12 @@ const buildRouteFromJournal = async () => {
 
 const buildRouteForCompletedJob = async (job) => {
   routeFloorId.value = String(job.floor_id)
-  routeTimeFrom.value = toDateTimeLocalValue(job.time_from)
-  routeTimeTo.value = toDateTimeLocalValue(job.time_to)
+  const fromParts = splitDateTimeLocalValue(job.time_from)
+  const toParts = splitDateTimeLocalValue(job.time_to)
+  routeDateFrom.value = fromParts.date
+  routeClockFrom.value = fromParts.time
+  routeDateTo.value = toParts.date
+  routeClockTo.value = toParts.time
   await buildRouteFromJournal()
 }
 
@@ -953,6 +992,10 @@ const pollRouteJob = async (jobId) => {
 
 const startGuestRouteAnalysis = async () => {
   if (!routeGuest.value || !routeFloorId.value) return
+  if (!routeGuest.value.has_body_embedding) {
+    ui.warn('Для анализа видео добавьте гостю фото полного роста для Re-ID')
+    return
+  }
   routeJobLoading.value = true
   routeJob.value = null
   routeResult.value = null
@@ -1085,8 +1128,11 @@ onBeforeUnmount(() => {
 .capture-hint { margin: 0; color: #64748b; font-size: 0.8rem; line-height: 1.35; }
 .route-dialog-layout { display: grid; grid-template-columns: 360px minmax(0, 1fr); gap: 1.25rem; align-items: start; }
 .route-controls-column, .route-map-column { min-width: 0; }
-.route-time-grid { display: grid; grid-template-columns: 1fr; gap: 0.65rem; }
-.route-time-grid .form-group, .route-time-grid .form-input { min-width: 0; }
+.route-period-card { display: flex; flex-direction: column; gap: 0.75rem; padding: 0.85rem; border: 1px solid #e2e8f0; border-radius: 12px; background: #f8fafc; }
+.route-period-title { color: #334155; font-size: 0.85rem; font-weight: 800; }
+.route-period-row { display: grid; grid-template-columns: minmax(0, 1fr) 124px; gap: 0.65rem; align-items: end; }
+.route-period-row .form-group, .route-period-row .form-input { min-width: 0; }
+.time-field .form-input { text-align: center; }
 .route-job-status { display: flex; flex-direction: column; gap: 0.45rem; padding: 0.9rem; border-radius: 12px; background: #f8fafc; border: 1px solid #e2e8f0; color: #334155; font-size: 0.9rem; }
 .job-note { color: #64748b; font-size: 0.82rem; }
 .job-error { color: #b91c1c; font-weight: 700; }
@@ -1229,7 +1275,7 @@ onBeforeUnmount(() => {
 
 @media (max-width: 768px) {
   .modal-body-split { flex-direction: column; }
-  .route-dialog-layout, .route-time-grid { grid-template-columns: 1fr; }
+  .route-dialog-layout, .route-period-row { grid-template-columns: 1fr; }
   .route-plan-preview { min-height: 340px; }
   .photo-column { width: 100%; box-sizing: border-box; }
   .form-grid { grid-template-columns: 1fr; }

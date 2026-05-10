@@ -327,7 +327,10 @@ def _keep_latest_event_per_camera(events: list[dict[str, Any]]) -> tuple[list[di
 
     filtered_events = sorted(
         latest_by_camera_id.values(),
-        key=lambda event: (event["timestamp"], event.get("tracking_log_id") or event.get("access_log_id") or 0),
+        key=lambda event: (
+            event["timestamp"],
+            event.get("tracking_log_id") or event.get("access_log_id") or 0,
+        ),
     )
     dropped_count = len(events) - len(filtered_events)
     if dropped_count <= 0:
@@ -521,15 +524,6 @@ def _transition_distance(
     if speed > settings.guest_route_max_pixels_per_second:
         return None
     return float(distance)
-
-
-def _transition_is_plausible(
-    session: Session,
-    floor_id: int,
-    from_event: dict[str, Any],
-    to_event: dict[str, Any],
-) -> bool:
-    return _transition_distance(session, floor_id, from_event, to_event) is not None
 
 
 def _filter_plausible_event_chain(

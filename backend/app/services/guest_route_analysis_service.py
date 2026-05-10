@@ -5,6 +5,7 @@ import re
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from functools import lru_cache
 from pathlib import Path
 
 import cv2
@@ -26,8 +27,6 @@ logger = logging.getLogger(__name__)
 VIDEO_FILE_PREFIX = "file://"
 WINDOWS_ABSOLUTE_PATH_RE = re.compile(r"^/[A-Za-z]:[\\/]")
 DEFAULT_SAMPLE_INTERVAL_SEC = max(0.5, settings.route_analysis_sample_interval_sec)
-EVENT_COOLDOWN_SEC = 20.0
-MAX_EVENTS_PER_CAMERA = 2
 TIME_WINDOW_PADDING_SEC = 5.0
 RUNNING_JOB_STATUSES = ("queued", "processing")
 
@@ -76,6 +75,7 @@ def _resolve_camera_video_path(camera: Camera) -> Path | None:
     return _normalize_video_file_path(source[len(VIDEO_FILE_PREFIX):])
 
 
+@lru_cache(maxsize=1)
 def _parse_camera_time_offsets() -> dict[str, float]:
     offsets: dict[str, float] = {}
     raw_value = settings.route_analysis_camera_time_offsets_raw
@@ -168,8 +168,6 @@ def create_guest_route_analysis_job(session: Session, guest_id: int, floor_id: i
     guest = session.get(Guest, guest_id)
     if not guest:
         raise ValueError("Гость не найден")
-    if not guest.is_active or guest.valid_until <= datetime.now():
-        raise ValueError("Гостевой пропуск не активен")
     if not guest.body_embedding:
         raise ValueError("Для построения маршрута нужно добавить фото полного роста для Re-ID")
 

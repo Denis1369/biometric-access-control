@@ -18,14 +18,14 @@ router = APIRouter(prefix="/api/cameras", tags=["Камеры"])
 READ_ROLES = (
     UserRole.SUPER_ADMIN,
     UserRole.CHECKPOINT_OPERATOR,
-    )
+)
 WRITE_ROLES = (
     UserRole.SUPER_ADMIN,
-    )
+)
 SNAPSHOT_ROLES = (
     UserRole.SUPER_ADMIN,
     UserRole.CHECKPOINT_OPERATOR,
-    )
+)
 
 ALLOWED_DIRECTIONS = {"in", "out", "both", "internal"}
 

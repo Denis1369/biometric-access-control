@@ -19,11 +19,11 @@ logger = logging.getLogger(__name__)
 READ_ROLES = (
     UserRole.SUPER_ADMIN,
     UserRole.CHECKPOINT_OPERATOR,
-    )
+)
 WRITE_ROLES = (
     UserRole.SUPER_ADMIN,
     UserRole.CHECKPOINT_OPERATOR,
-    )
+)
 
 
 def _normalize_required_name(value: str, field_name: str) -> str:
