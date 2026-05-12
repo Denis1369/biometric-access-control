@@ -13,7 +13,12 @@ from app.core.database import get_session
 from app.core.deps import get_current_user, require_roles
 from app.models.user import User, UserRole
 from app.models.video_analysis import VideoAnalysisEvent, VideoAnalysisJob
-from app.services.video_analysis_service import BASE_STORAGE_DIR, reset_video_analysis_job, schedule_video_analysis
+from app.services.video_analysis_service import (
+    BASE_STORAGE_DIR,
+    build_video_analysis_job_payload,
+    reset_video_analysis_job,
+    schedule_video_analysis,
+)
 
 router = APIRouter(prefix="/api/video-analysis", tags=["Анализ видео"])
 logger = logging.getLogger(__name__)
@@ -58,21 +63,7 @@ class VideoAnalysisEventRead(SQLModel):
 
 
 def _job_read(job: VideoAnalysisJob) -> VideoAnalysisJobRead:
-    return VideoAnalysisJobRead(
-        id=job.id,
-        original_filename=job.original_filename,
-        status=job.status,
-        reader_backend=job.reader_backend,
-        total_frames=job.total_frames,
-        analyzed_frames=job.analyzed_frames,
-        duration_sec=job.duration_sec,
-        granted_count=job.granted_count,
-        denied_count=job.denied_count,
-        created_at=job.created_at,
-        started_at=job.started_at,
-        finished_at=job.finished_at,
-        error_message=job.error_message,
-    )
+    return VideoAnalysisJobRead(**build_video_analysis_job_payload(job))
 
 
 def _event_read(event: VideoAnalysisEvent) -> VideoAnalysisEventRead:

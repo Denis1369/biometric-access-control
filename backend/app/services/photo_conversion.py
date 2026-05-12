@@ -1,5 +1,7 @@
 import os
 
+os.environ.setdefault("NO_ALBUMENTATIONS_UPDATE", "1")
+
 from app.core.config import settings
 
 thread_count = str(settings.ml_thread_count)
@@ -12,20 +14,26 @@ os.environ["NUMEXPR_NUM_THREADS"] = thread_count
 
 import logging
 import threading
+from typing import Any
 
 import cv2
 import numpy as np
-import onnxruntime as ort
-from insightface.app import FaceAnalysis
 
 
-_face_app = None
+_face_app: Any | None = None
 _face_app_init_lock = threading.Lock()
 _face_app_infer_lock = threading.Lock()
 logger = logging.getLogger(__name__)
 
 
+def _get_onnxruntime():
+    import onnxruntime as ort
+
+    return ort
+
+
 def _choose_providers() -> list[str]:
+    ort = _get_onnxruntime()
     available = set(ort.get_available_providers())
 
     if "CUDAExecutionProvider" in available:
@@ -34,7 +42,10 @@ def _choose_providers() -> list[str]:
     return ["CPUExecutionProvider"]
 
 
-def _build_face_app() -> FaceAnalysis:
+def _build_face_app():
+    from insightface.app import FaceAnalysis
+
+    ort = _get_onnxruntime()
     providers = _choose_providers()
     app = FaceAnalysis(name="buffalo_l", providers=providers)
 
@@ -48,7 +59,7 @@ def _build_face_app() -> FaceAnalysis:
     return app
 
 
-def get_face_app() -> FaceAnalysis:
+def get_face_app():
     global _face_app
     if _face_app is None:
         with _face_app_init_lock:

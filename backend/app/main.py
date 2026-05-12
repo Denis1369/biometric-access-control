@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from contextlib import asynccontextmanager
@@ -30,6 +31,7 @@ from app.core.database import engine
 from app.core.seed import ensure_demo_data
 from app.services.guest_route_analysis_service import fail_interrupted_route_analysis_jobs
 from app.services.stream_manager import stream_manager
+from app.services.websocket_manager import topic_ws_manager
 
 logging.basicConfig(
     level=getattr(logging, settings.log_level, logging.INFO),
@@ -65,6 +67,7 @@ def ensure_runtime_schema_updates():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    topic_ws_manager.set_loop(asyncio.get_running_loop())
     create_db_and_tables()
     ensure_runtime_schema_updates()
 
@@ -86,6 +89,7 @@ async def lifespan(app: FastAPI):
     yield
 
     logger.info("Остановка потоков...")
+    topic_ws_manager.set_loop(None)
     for cam_id in list(stream_manager.workers.keys()):
         stream_manager.remove_camera(cam_id)
 

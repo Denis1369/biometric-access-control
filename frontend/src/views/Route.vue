@@ -201,6 +201,7 @@ import { buildWsUrl } from '../api/client'
 import { analyticsApi } from '../api/analytics'
 import { guestsApi } from '../api/guests'
 import { employeesApi } from '../api/employees'
+import { createJsonWebSocket } from '../services/jsonWebSocket'
 import { createCanvasStreamPlayer } from '../services/liveStream'
 import { useUi } from '../services/ui'
 
@@ -218,8 +219,7 @@ const streamCanvases = {}
 const streamReadyResolvers = {}
 
 const logs = ref([])
-let logInterval = null
-let demoRecognitionHeartbeat = null
+let accessLogSocket = null
 
 const displayGuestDialog = ref(false)
 const snapshotCameraId = ref('')
@@ -300,6 +300,50 @@ const fetchLogs = async () => {
   }
 }
 
+const upsertAccessLog = (log) => {
+  if (!log?.id) return
+
+  const existingIndex = logs.value.findIndex((item) => item.id === log.id)
+  if (existingIndex === -1) {
+    logs.value = [log, ...logs.value].slice(0, 50)
+    return
+  }
+
+  const nextLogs = [...logs.value]
+  nextLogs[existingIndex] = log
+  logs.value = nextLogs
+}
+
+const closeAccessLogSocket = () => {
+  if (!accessLogSocket) return
+  accessLogSocket.close()
+  accessLogSocket = null
+}
+
+const connectAccessLogSocket = () => {
+  closeAccessLogSocket()
+  accessLogSocket = createJsonWebSocket({
+    path: '/ws/access-logs',
+    onMessage: (payload) => {
+      if (payload?.type === 'snapshot' && Array.isArray(payload.logs)) {
+        logs.value = payload.logs
+        return
+      }
+      if (payload?.type === 'created') {
+        upsertAccessLog(payload.log)
+      }
+    },
+    onError: (error) => {
+      console.error('Ошибка WebSocket журнала событий:', error)
+      closeAccessLogSocket()
+      void fetchLogs()
+    },
+    onClose: () => {
+      accessLogSocket = null
+    },
+  })
+}
+
 const formatTime = (isoString) => {
   if (!isoString) return '—'
   const match = String(isoString).match(/(\d{2}:\d{2}:\d{2})/)
@@ -343,31 +387,6 @@ const resolveStreamReady = (cameraId, payload = { ok: true }) => {
   resolver(payload)
 }
 
-const setDemoRecognitionState = async (cameraId, enabled, { silent = false } = {}) => {
-  if (!isDemoCameraId(cameraId)) return
-
-  try {
-    await camerasApi.setDemoRecognition(cameraId, { enabled })
-  } catch (error) {
-    if (!silent) {
-      ui.error(ui.getErrorMessage(error, `Не удалось ${enabled ? 'включить' : 'выключить'} анализ демо-камеры`))
-    } else {
-      console.error(`Ошибка переключения демо-анализа камеры ${cameraId}:`, error)
-    }
-  }
-}
-
-const refreshSelectedDemoRecognition = async () => {
-  const selectedDemoIds = selectedCameraIds.value.filter(
-    (cameraId) => isDemoCameraId(cameraId) && hasStreamFrame(cameraId)
-  )
-  if (selectedDemoIds.length === 0) return
-
-  await Promise.allSettled(
-    selectedDemoIds.map((cameraId) => camerasApi.setDemoRecognition(cameraId, { enabled: true }))
-  )
-}
-
 const syncRestartSelectedDemoCameras = async () => {
   const cameraIds = [...selectedDemoCameraIds.value]
   if (cameraIds.length === 0 || isSyncStarting.value) return
@@ -400,12 +419,8 @@ const syncRestartSelectedDemoCameras = async () => {
 
 const toggleCameraStream = async (cameraId) => {
   if (selectedCameraIds.value.includes(cameraId)) {
-    const started = await startSingleStream(cameraId)
-    if (started) {
-      await setDemoRecognitionState(cameraId, true)
-    }
+    await startSingleStream(cameraId)
   } else {
-    await setDemoRecognitionState(cameraId, false)
     stopSingleStream(cameraId)
   }
 }
@@ -442,13 +457,11 @@ const startSingleStream = async (cameraId) => {
       console.error(`Ошибка видеопотока камеры ${cameraId}`)
       updateStreamState(cameraId, { hasFrame: false, error: 'Ошибка потока' })
       resolveStreamReady(cameraId, { ok: false, reason: 'error' })
-      void setDemoRecognitionState(cameraId, false, { silent: true })
     },
     onClose: () => {
       delete streamPlayers[cameraId]
       updateStreamState(cameraId, { hasFrame: false })
       resolveStreamReady(cameraId, { ok: false, reason: 'closed' })
-      void setDemoRecognitionState(cameraId, false, { silent: true })
     },
   })
 
@@ -467,15 +480,8 @@ const stopSingleStream = (cameraId) => {
   removeStreamState(cameraId)
 }
 
-const cleanupAllStreams = async () => {
-  const activeCameraIds = [...selectedCameraIds.value]
+const cleanupAllStreams = () => {
   Object.keys(streamPlayers).forEach((id) => stopSingleStream(Number(id)))
-
-  await Promise.allSettled(
-    activeCameraIds
-      .filter((cameraId) => isDemoCameraId(cameraId))
-      .map((cameraId) => camerasApi.setDemoRecognition(cameraId, { enabled: false }))
-  )
 }
 
 
@@ -567,17 +573,12 @@ const saveGuest = async () => {
 onMounted(() => {
   loadCameras()
   loadEmployees()
-  fetchLogs()
-  logInterval = setInterval(fetchLogs, 2000)
-  demoRecognitionHeartbeat = setInterval(() => {
-    void refreshSelectedDemoRecognition()
-  }, 3000)
+  connectAccessLogSocket()
 })
 
 onBeforeUnmount(() => {
-  clearInterval(logInterval)
-  clearInterval(demoRecognitionHeartbeat)
-  void cleanupAllStreams()
+  closeAccessLogSocket()
+  cleanupAllStreams()
 })
 </script>
 

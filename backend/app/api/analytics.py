@@ -14,6 +14,7 @@ from app.models.employees import Employee
 from app.models.guests import Guest
 from app.models.logs import AccessLog, TrackingLog
 from app.models.user import UserRole
+from app.services.access_log_service import build_person_name, get_recent_access_logs
 
 router = APIRouter(prefix="/api/analytics", tags=["Аналитика и Журналы"])
 
@@ -62,48 +63,13 @@ def _parse_target_date(target_date: str | None) -> date:
         ) from exc
 
 
-def _build_person_name(employee: Employee | None, guest: Guest | None) -> str:
-    if employee:
-        return " ".join(
-            part
-            for part in (employee.last_name, employee.first_name, employee.middle_name)
-            if part
-        )
-    if guest:
-        return f"[Гость] {guest.last_name} {guest.first_name}"
-    return "Неизвестное лицо"
-
-
 @router.get(
     "/access-logs",
     response_model=List[AccessLogResponse],
     dependencies=[Depends(require_roles(*BASIC_ANALYTICS_ROLES))],
 )
 def get_access_logs(session: Session = Depends(get_session), skip: int = 0, limit: int = 100):
-    statement = (
-        select(AccessLog, Employee, Guest, Camera)
-        .join(Employee, AccessLog.employee_id == Employee.id, isouter=True)
-        .join(Guest, AccessLog.guest_id == Guest.id, isouter=True)
-        .join(Camera, AccessLog.camera_id == Camera.id, isouter=True)
-        .order_by(AccessLog.timestamp.desc())
-        .offset(skip)
-        .limit(limit)
-    )
-
-    results = session.exec(statement).all()
-
-    response_data = []
-    for access_log, employee, guest, camera in results:
-        response_data.append(
-            AccessLogResponse(
-                id=access_log.id,
-                timestamp=access_log.timestamp,
-                status=access_log.status,
-                employee_name=_build_person_name(employee, guest),
-                camera_name=camera.name if camera else "Удаленная камера",
-            )
-        )
-    return response_data
+    return get_recent_access_logs(session, skip=skip, limit=limit)
 
 
 @router.get(
@@ -130,7 +96,7 @@ def get_tracking_logs(session: Session = Depends(get_session), skip: int = 0, li
                 id=tracking_log.id,
                 timestamp=tracking_log.timestamp,
                 confidence=tracking_log.confidence,
-                employee_name=_build_person_name(employee, guest),
+                employee_name=build_person_name(employee, guest),
                 camera_name=camera.name if camera else "Неизвестно",
             )
         )

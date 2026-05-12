@@ -6,6 +6,8 @@ from datetime import datetime
 from pathlib import Path
 
 import cv2
+import numpy as np
+from PIL import Image, ImageDraw, ImageFont
 from sqlmodel import Session, select
 
 from app.core.database import engine
@@ -14,8 +16,7 @@ from app.models.guests import Guest
 from app.models.video_analysis import VideoAnalysisEvent, VideoAnalysisJob
 from app.services.recognition_service import find_matching_employee
 from app.services.video_readers import create_frame_reader
-from PIL import Image, ImageDraw, ImageFont
-import numpy as np
+from app.services.websocket_manager import topic_ws_manager, video_analysis_job_topic
 
 BASE_STORAGE_DIR = Path(__file__).resolve().parents[3] / "storage" / "video_analysis"
 BASE_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
@@ -25,12 +26,37 @@ _active_jobs_lock = threading.Lock()
 logger = logging.getLogger(__name__)
 
 
+def build_video_analysis_job_payload(job: VideoAnalysisJob) -> dict:
+    return {
+        "id": job.id,
+        "original_filename": job.original_filename,
+        "status": job.status,
+        "reader_backend": job.reader_backend,
+        "total_frames": job.total_frames,
+        "analyzed_frames": job.analyzed_frames,
+        "duration_sec": job.duration_sec,
+        "granted_count": job.granted_count,
+        "denied_count": job.denied_count,
+        "created_at": job.created_at,
+        "started_at": job.started_at,
+        "finished_at": job.finished_at,
+        "error_message": job.error_message,
+    }
+
+
+def publish_video_analysis_job_update(job: VideoAnalysisJob) -> None:
+    if job.id is None:
+        return
+    topic_ws_manager.publish(
+        video_analysis_job_topic(job.id),
+        build_video_analysis_job_payload(job),
+    )
+
+
 def _job_dir(job_id: int) -> Path:
     path = BASE_STORAGE_DIR / f"job_{job_id}"
     path.mkdir(parents=True, exist_ok=True)
     return path
-
-
 
 
 def _cleanup_job_artifacts(job_id: int):
@@ -70,8 +96,11 @@ def reset_video_analysis_job(job_id: int) -> bool:
         job.error_message = None
         session.add(job)
         session.commit()
+        session.refresh(job)
+        publish_video_analysis_job_update(job)
 
     return True
+
 
 def _person_name(person) -> str | None:
     if not person:
@@ -86,6 +115,7 @@ FONT_CANDIDATES = [
     "C:/Windows/Fonts/segoeui.ttf",
     "C:/Windows/Fonts/tahoma.ttf",
 ]
+
 
 def _get_font(size: int = 28):
     for path in FONT_CANDIDATES:
@@ -144,6 +174,8 @@ def _update_job_status(job_id: int, status: str, **extra):
             setattr(job, key, value)
         session.add(job)
         session.commit()
+        session.refresh(job)
+        publish_video_analysis_job_update(job)
 
 
 def _process_job(job_id: int):
@@ -257,6 +289,9 @@ def _run_job(job_id: int):
                     job.reader_backend = reader.backend_name
                     session.add(job)
                 session.commit()
+                if job:
+                    session.refresh(job)
+                    publish_video_analysis_job_update(job)
 
         _update_job_status(
             job_id,

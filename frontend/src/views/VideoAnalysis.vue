@@ -85,7 +85,10 @@
                 <i class="pi pi-replay"></i>
                 {{ rerunning ? 'Перезапуск...' : 'Повторный анализ' }}
               </button>
-              <button class="btn-text" @click="refreshSelectedJob"><i class="pi pi-refresh"></i> Обновить</button>
+              <button class="btn-text" @click="loadEvents(selectedJob.id)">
+                <i class="pi pi-refresh"></i>
+                Обновить события
+              </button>
             </div>
           </div>
 
@@ -162,6 +165,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { videoAnalysisApi } from '../api/videoAnalysis'
+import { createJsonWebSocket } from '../services/jsonWebSocket'
 import { useUi } from '../services/ui'
 
 const ui = useUi()
@@ -174,10 +178,73 @@ const jobsLoading = ref(false)
 const eventsLoading = ref(false)
 const rerunning = ref(false)
 
-let refreshTimer = null
+const jobSockets = new Map()
 
-const hasProcessingJobs = computed(() => jobs.value.some((job) => ['queued', 'processing'].includes(job.status)))
 const isSelectedJobBusy = computed(() => ['queued', 'processing'].includes(selectedJob.value?.status))
+
+function isRunningJob(job) {
+  return ['queued', 'processing'].includes(job?.status)
+}
+
+function upsertJob(job) {
+  const index = jobs.value.findIndex((item) => item.id === job.id)
+  if (index === -1) {
+    jobs.value = [job, ...jobs.value]
+  } else {
+    jobs.value[index] = job
+    jobs.value = [...jobs.value]
+  }
+
+  if (selectedJob.value?.id === job.id) {
+    selectedJob.value = job
+  }
+}
+
+function closeJobSocket(jobId) {
+  const socket = jobSockets.get(jobId)
+  if (!socket) return
+  socket.close()
+  jobSockets.delete(jobId)
+}
+
+function closeAllJobSockets() {
+  for (const jobId of jobSockets.keys()) {
+    closeJobSocket(jobId)
+  }
+}
+
+function subscribeJob(jobId) {
+  if (jobSockets.has(jobId)) return
+
+  const socket = createJsonWebSocket({
+    path: `/ws/video-analysis/jobs/${jobId}`,
+    onMessage: (job) => {
+      upsertJob(job)
+      if (selectedJob.value?.id === job.id) {
+        void loadEvents(job.id)
+      }
+      if (!isRunningJob(job)) {
+        closeJobSocket(job.id)
+      }
+    },
+    onError: (error) => {
+      closeJobSocket(jobId)
+      ui.error(ui.getErrorMessage(error, 'WebSocket статуса анализа видео недоступен'))
+    },
+  })
+  jobSockets.set(jobId, socket)
+}
+
+function syncJobSubscriptions() {
+  jobs.value.filter(isRunningJob).forEach((job) => subscribeJob(job.id))
+
+  for (const jobId of jobSockets.keys()) {
+    const job = jobs.value.find((item) => item.id === jobId)
+    if (!isRunningJob(job)) {
+      closeJobSocket(jobId)
+    }
+  }
+}
 
 function statusLabel(status) {
   return {
@@ -231,6 +298,7 @@ async function loadJobs({ keepSelection = true } = {}) {
   try {
     const response = await videoAnalysisApi.getJobs()
     jobs.value = response.data
+    syncJobSubscriptions()
 
     if (!keepSelection) {
       selectedJob.value = jobs.value[0] || null
@@ -274,27 +342,10 @@ async function selectJob(jobId) {
   const job = jobs.value.find((item) => item.id === jobId)
   if (!job) return
   selectedJob.value = job
-  await loadEvents(jobId)
-}
-
-async function refreshSelectedJob() {
-  if (!selectedJob.value) return
-  try {
-    const [jobRes, eventsRes] = await Promise.all([
-      videoAnalysisApi.getJob(selectedJob.value.id),
-      videoAnalysisApi.getJobEvents(selectedJob.value.id),
-    ])
-
-    selectedJob.value = jobRes.data
-    const idx = jobs.value.findIndex((item) => item.id === selectedJob.value.id)
-    if (idx !== -1) {
-      jobs.value[idx] = jobRes.data
-      jobs.value = [...jobs.value]
-    }
-    events.value = eventsRes.data
-  } catch (error) {
-    console.error('Ошибка обновления выбранной задачи:', error)
+  if (isRunningJob(job)) {
+    subscribeJob(job.id)
   }
+  await loadEvents(jobId)
 }
 
 async function rerunSelectedJob() {
@@ -302,14 +353,9 @@ async function rerunSelectedJob() {
   rerunning.value = true
   try {
     const response = await videoAnalysisApi.rerunJob(selectedJob.value.id)
-    selectedJob.value = response.data
     events.value = []
-    const idx = jobs.value.findIndex((item) => item.id === response.data.id)
-    if (idx !== -1) {
-      jobs.value[idx] = response.data
-      jobs.value = [...jobs.value]
-    }
-    startAutoRefresh()
+    upsertJob(response.data)
+    subscribeJob(response.data.id)
   } catch (error) {
     console.error('Ошибка повторного анализа видео:', error)
     ui.error(ui.getErrorMessage(error, 'Не удалось повторно запустить анализ'))
@@ -329,7 +375,8 @@ async function uploadVideo() {
   try {
     const response = await videoAnalysisApi.createJob(selectedFile.value)
     selectedFile.value = null
-    await loadJobs({ keepSelection: true })
+    upsertJob(response.data)
+    subscribeJob(response.data.id)
     await selectJob(response.data.id)
     ui.success('Видео загружено, анализ запущен')
   } catch (error) {
@@ -340,33 +387,12 @@ async function uploadVideo() {
   }
 }
 
-function startAutoRefresh() {
-  stopAutoRefresh()
-  refreshTimer = setInterval(async () => {
-    await loadJobs({ keepSelection: true })
-    if (selectedJob.value && ['queued', 'processing'].includes(selectedJob.value.status)) {
-      await refreshSelectedJob()
-    }
-    if (!hasProcessingJobs.value) {
-      stopAutoRefresh()
-    }
-  }, 2500)
-}
-
-function stopAutoRefresh() {
-  if (refreshTimer) {
-    clearInterval(refreshTimer)
-    refreshTimer = null
-  }
-}
-
 onMounted(async () => {
   await loadJobs({ keepSelection: false })
-  startAutoRefresh()
 })
 
 onBeforeUnmount(() => {
-  stopAutoRefresh()
+  closeAllJobSockets()
 })
 </script>
 

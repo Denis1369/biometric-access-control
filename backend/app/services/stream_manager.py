@@ -16,6 +16,7 @@ from app.core.config import settings
 from app.core.database import engine
 from app.models.cameras import Camera
 from app.models.logs import AccessLog, TrackingLog
+from app.services.access_log_service import publish_access_log_created
 from app.services.recognition_service import find_matching_person_in_frame
 from app.services.reid_service import (
     detect_person_presence,
@@ -405,16 +406,16 @@ class CameraStreamWorker:
         guest_id: int | None = None,
         status: str,
         confidence: float | None = None,
-    ) -> None:
-        session.add(
-            AccessLog(
-                employee_id=employee_id,
-                guest_id=guest_id,
-                camera_id=self.camera_id,
-                status=status,
-                confidence=confidence,
-            )
+    ) -> AccessLog:
+        access_log = AccessLog(
+            employee_id=employee_id,
+            guest_id=guest_id,
+            camera_id=self.camera_id,
+            status=status,
+            confidence=confidence,
         )
+        session.add(access_log)
+        return access_log
 
     def _write_tracking_log(
         self,
@@ -484,20 +485,22 @@ class CameraStreamWorker:
                 if self._should_emit_event(cooldown_key, self.access_cooldown_sec):
                     confidence = self._match_confidence(face_match.distance)
                     if face_match.person_type == "employee":
-                        self._write_access_log(
+                        access_log = self._write_access_log(
                             session,
                             employee_id=face_match.person.id,
                             status="granted",
                             confidence=confidence,
                         )
                     else:
-                        self._write_access_log(
+                        access_log = self._write_access_log(
                             session,
                             guest_id=face_match.person.id,
                             status="granted",
                             confidence=confidence,
                         )
                     session.commit()
+                    session.refresh(access_log)
+                    publish_access_log_created(access_log.id)
                     badge = "[ГОСТЬ]" if face_match.person_type == "guest" else "[СОТРУДНИК]"
                     logger.info(
                         "Камера %s: проход %s %s %s",
@@ -548,8 +551,10 @@ class CameraStreamWorker:
 
             elif face_match.face_bbox is not None and face_match.distance is not None:
                 if self._should_emit_event("unknown", 10.0):
-                    self._write_access_log(session, status="denied", confidence=None)
+                    access_log = self._write_access_log(session, status="denied", confidence=None)
                     session.commit()
+                    session.refresh(access_log)
+                    publish_access_log_created(access_log.id)
                     logger.warning(
                         "Камера %s: тревога, обнаружено неизвестное лицо",
                         self.camera_id,

@@ -454,6 +454,7 @@ import { employeesApi } from '../api/employees'
 import { floorsApi } from '../api/floors'
 import { guestRoutesApi } from '../api/guestRoutes'
 import { formatPolygonPoints, polygonCentroid } from '../services/geometry'
+import { createJsonWebSocket } from '../services/jsonWebSocket'
 import { useAuth } from '../services/auth'
 import { useUi } from '../services/ui'
 
@@ -508,7 +509,8 @@ const routePlanMetrics = ref({
   naturalWidth: 1,
   naturalHeight: 1,
 })
-let routeJobPollTimer = null
+let routeJobSocket = null
+let routeJobFinalized = false
 
 const guestForm = ref({
   last_name: '',
@@ -910,10 +912,10 @@ const onRouteFloorChange = () => {
   routePlanMetrics.value = { naturalWidth: 1, naturalHeight: 1 }
 }
 
-const clearRouteJobPolling = () => {
-  if (routeJobPollTimer) {
-    clearInterval(routeJobPollTimer)
-    routeJobPollTimer = null
+const clearRouteJobSubscription = () => {
+  if (routeJobSocket) {
+    routeJobSocket.close()
+    routeJobSocket = null
   }
 }
 
@@ -922,6 +924,7 @@ const openRouteDialog = (guest) => {
   routeJob.value = null
   routeResult.value = null
   routeResultLoading.value = false
+  routeJobFinalized = false
   routePlanVersion.value = Date.now()
   routePlanMetrics.value = { naturalWidth: 1, naturalHeight: 1 }
   setDefaultRoutePeriod()
@@ -930,13 +933,14 @@ const openRouteDialog = (guest) => {
 }
 
 const closeRouteDialog = () => {
-  clearRouteJobPolling()
+  clearRouteJobSubscription()
   routeDialogVisible.value = false
   routeGuest.value = null
   routeJob.value = null
   routeJobLoading.value = false
   routeResultLoading.value = false
   routeResult.value = null
+  routeJobFinalized = false
 }
 
 const buildRouteFromJournal = async () => {
@@ -972,22 +976,54 @@ const buildRouteForCompletedJob = async (job) => {
   routeClockFrom.value = fromParts.time
   routeDateTo.value = toParts.date
   routeClockTo.value = toParts.time
+
+  if (job.probable_route) {
+    routeResult.value = job.probable_route
+    routePlanVersion.value = Date.now()
+    if (!job.probable_route.events?.length) {
+      ui.warn('За выбранный период событий не найдено')
+    } else if ((job.warnings || []).length) {
+      ui.warn('Маршрут построен с предупреждениями')
+    } else {
+      ui.success('Видео проанализировано, маршрут построен')
+    }
+    return
+  }
+
   await buildRouteFromJournal()
 }
 
-const pollRouteJob = async (jobId) => {
-  const response = await guestRoutesApi.getGuestRouteAnalysisJob(jobId)
-  routeJob.value = response.data
+const handleRouteJobUpdate = async (job) => {
+  routeJob.value = job
 
-  if (response.data.status === 'completed') {
-    clearRouteJobPolling()
+  if (job.status === 'completed' && !routeJobFinalized) {
+    routeJobFinalized = true
+    clearRouteJobSubscription()
     routeJobLoading.value = false
-    await buildRouteForCompletedJob(response.data)
-  } else if (response.data.status === 'failed') {
-    clearRouteJobPolling()
+    await buildRouteForCompletedJob(job)
+  } else if (job.status === 'failed' && !routeJobFinalized) {
+    routeJobFinalized = true
+    clearRouteJobSubscription()
     routeJobLoading.value = false
-    ui.error(response.data.error_message || 'Офлайн-анализ маршрута завершился с ошибкой')
+    ui.error(job.error_message || 'Офлайн-анализ маршрута завершился с ошибкой')
   }
+}
+
+const subscribeRouteJob = (jobId) => {
+  clearRouteJobSubscription()
+  routeJobFinalized = false
+  routeJobSocket = createJsonWebSocket({
+    path: `/ws/guest-route-analysis-jobs/${jobId}`,
+    onMessage: (job) => {
+      void handleRouteJobUpdate(job)
+    },
+    onError: (error) => {
+      if (!routeJobFinalized) {
+        routeJobLoading.value = false
+        ui.error(ui.getErrorMessage(error, 'WebSocket статуса маршрута недоступен'))
+      }
+    },
+  })
 }
 
 const startGuestRouteAnalysis = async () => {
@@ -999,18 +1035,11 @@ const startGuestRouteAnalysis = async () => {
   routeJobLoading.value = true
   routeJob.value = null
   routeResult.value = null
-  clearRouteJobPolling()
+  clearRouteJobSubscription()
   try {
     const response = await guestRoutesApi.createGuestRouteAnalysisJob(routeFloorId.value, routeGuest.value.id)
     routeJob.value = response.data
-    routeJobPollTimer = setInterval(() => {
-      void pollRouteJob(response.data.id).catch((error) => {
-        clearRouteJobPolling()
-        routeJobLoading.value = false
-        ui.error(ui.getErrorMessage(error, 'Не удалось получить статус анализа маршрута'))
-      })
-    }, 2500)
-    await pollRouteJob(response.data.id)
+    subscribeRouteJob(response.data.id)
   } catch (error) {
     routeJobLoading.value = false
     ui.error(ui.getErrorMessage(error, 'Не удалось запустить анализ маршрута гостя'))
@@ -1041,7 +1070,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
-  clearRouteJobPolling()
+  clearRouteJobSubscription()
   revokePreview(facePhotoPreview)
   revokePreview(bodyPhotoPreview)
   revokePreview(bodyEnrollmentPreview)

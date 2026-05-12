@@ -21,6 +21,7 @@ from app.models.logs import TrackingLog
 from app.services.guest_route_service import build_guest_probable_route
 from app.services.recognition_service import cosine_distance, find_matching_person_in_frame
 from app.services.reid_service import extract_body_detections, update_guest_body_embedding
+from app.services.websocket_manager import guest_route_analysis_job_topic, topic_ws_manager
 
 logger = logging.getLogger(__name__)
 
@@ -199,6 +200,8 @@ def _update_job(job_id: int, **updates) -> None:
             setattr(job, key, value)
         session.add(job)
         session.commit()
+        session.refresh(job)
+        _publish_job_update(session, job)
 
 
 def _append_job_warning(job: GuestRouteAnalysisJob, warning: str) -> None:
@@ -220,6 +223,7 @@ def _fail_job(
     session.add(job)
     session.commit()
     session.refresh(job)
+    _publish_job_update(session, job)
 
 
 def expire_stale_route_analysis_jobs(session: Session) -> int:
@@ -465,6 +469,7 @@ def _run_job(job_id: int) -> None:
             session.add(job)
             session.commit()
             session.refresh(job)
+            _publish_job_update(session, job)
 
             guest_vector = np.asarray(guest.body_embedding, dtype=np.float32)
             processed_cameras = 0
@@ -490,6 +495,8 @@ def _run_job(job_id: int) -> None:
                 job.events_written = events_written
                 session.add(job)
                 session.commit()
+                session.refresh(job)
+                _publish_job_update(session, job)
 
             if events_written == 0:
                 _append_job_warning(job, "Гость не найден на видео выбранного этажа")
@@ -499,6 +506,8 @@ def _run_job(job_id: int) -> None:
             job.events_written = events_written
             session.add(job)
             session.commit()
+            session.refresh(job)
+            _publish_job_update(session, job)
     except Exception as exc:
         logger.exception("Ошибка офлайн-построения маршрута гостя для job_id=%s", job_id)
         _update_job(
@@ -569,3 +578,12 @@ def build_job_payload(session: Session, job: GuestRouteAnalysisJob) -> dict:
         "finished_at": job.finished_at,
         "probable_route": probable_route,
     }
+
+
+def _publish_job_update(session: Session, job: GuestRouteAnalysisJob) -> None:
+    if job.id is None:
+        return
+    topic_ws_manager.publish(
+        guest_route_analysis_job_topic(job.id),
+        build_job_payload(session, job),
+    )

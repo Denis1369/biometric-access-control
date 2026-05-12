@@ -22,29 +22,16 @@ from app.services.recognition_service import cosine_distance
 _torch_import_error: Exception | None = None
 _yolo_import_error: Exception | None = None
 _torchreid_import_error: Exception | None = None
+_torch_import_checked = False
+_yolo_import_checked = False
+_torchreid_import_checked = False
+torch = None
+YOLO = None
+FeatureExtractor = None
 
-try:
-    import torch
-except Exception as exc:
-    torch = None
-    _torch_import_error = exc
-
-try:
-    from ultralytics import YOLO
-except Exception as exc:
-    YOLO = None
-    _yolo_import_error = exc
-
-try:
-    from torchreid.utils import FeatureExtractor
-except Exception as exc:
-    try:
-        from torchreid.reid.utils.feature_extractor import FeatureExtractor
-    except Exception as fallback_exc:
-        FeatureExtractor = None
-        _torchreid_import_error = fallback_exc
-    else:
-        _torchreid_import_error = exc
+# TorchReID pulls albumentations on import. Its default update check can block
+# backend startup in offline demo environments, so keep imports deterministic.
+os.environ.setdefault("NO_ALBUMENTATIONS_UPDATE", "1")
 
 
 logger = logging.getLogger(__name__)
@@ -57,6 +44,62 @@ _detector_initialization_error: Exception | None = None
 _extractor_initialization_error: Exception | None = None
 _availability_warning_logged = False
 _model_cache_configured = False
+
+
+def _ensure_torch_imported() -> bool:
+    global _torch_import_checked, _torch_import_error, torch
+    if _torch_import_checked:
+        return torch is not None
+
+    _torch_import_checked = True
+    try:
+        import torch as imported_torch
+
+        torch = imported_torch
+    except Exception as exc:
+        _torch_import_error = exc
+        torch = None
+    return torch is not None
+
+
+def _ensure_yolo_imported() -> bool:
+    global YOLO, _yolo_import_checked, _yolo_import_error
+    if _yolo_import_checked:
+        return YOLO is not None
+
+    _yolo_import_checked = True
+    try:
+        from ultralytics import YOLO as imported_yolo
+
+        YOLO = imported_yolo
+    except Exception as exc:
+        _yolo_import_error = exc
+        YOLO = None
+    return YOLO is not None
+
+
+def _ensure_torchreid_imported() -> bool:
+    global FeatureExtractor, _torchreid_import_checked, _torchreid_import_error
+    if _torchreid_import_checked:
+        return FeatureExtractor is not None
+
+    _torchreid_import_checked = True
+    try:
+        from torchreid.utils import FeatureExtractor as imported_feature_extractor
+
+        FeatureExtractor = imported_feature_extractor
+    except Exception as exc:
+        try:
+            from torchreid.reid.utils.feature_extractor import (
+                FeatureExtractor as imported_feature_extractor,
+            )
+
+            FeatureExtractor = imported_feature_extractor
+            _torchreid_import_error = exc
+        except Exception as fallback_exc:
+            FeatureExtractor = None
+            _torchreid_import_error = fallback_exc
+    return FeatureExtractor is not None
 
 
 @dataclass(frozen=True)
@@ -91,7 +134,7 @@ def _normalize_embedding(vector: np.ndarray) -> np.ndarray:
 def _resolve_reid_device() -> str:
     if settings.reid_device and settings.reid_device != "auto":
         return settings.reid_device
-    if torch is not None and torch.cuda.is_available():
+    if _ensure_torch_imported() and torch.cuda.is_available():
         return "cuda"
     return "cpu"
 
@@ -170,7 +213,7 @@ def _configure_model_cache() -> None:
     settings.reid_torch_cache_path.mkdir(parents=True, exist_ok=True)
     os.environ["TORCH_HOME"] = str(settings.reid_torch_cache_path)
     os.environ.setdefault("XDG_CACHE_HOME", str(settings.models_path / "cache"))
-    if torch is not None:
+    if _ensure_torch_imported():
         torch.hub.set_dir(str(settings.reid_torch_cache_path / "hub"))
 
     _model_cache_configured = True
@@ -192,9 +235,9 @@ def _ensure_feature_extractor_ready() -> bool:
         return False
 
     missing = []
-    if torch is None:
+    if not _ensure_torch_imported():
         missing.append(f"torch ({_torch_import_error})")
-    if FeatureExtractor is None:
+    if not _ensure_torchreid_imported():
         missing.append(f"torchreid ({_torchreid_import_error})")
     if missing:
         _log_unavailable_once(f"не установлены зависимости: {', '.join(missing)}")
@@ -246,7 +289,7 @@ def _ensure_feature_extractor_ready() -> bool:
 def _ensure_person_detector_ready() -> bool:
     global _person_detector, _detector_initialization_error
 
-    if YOLO is None:
+    if not _ensure_yolo_imported():
         _log_unavailable_once(f"не установлена зависимость: ultralytics ({_yolo_import_error})")
         return False
 
