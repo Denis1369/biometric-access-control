@@ -1,14 +1,15 @@
 <template>
   <div class="page-container">
-    <div class="header-actions">
-      <div>
-        <h1 class="page-title">Пользователи системы</h1>
-        <p class="page-subtitle">Создание учетных записей для super admin и операторов КПП.</p>
-      </div>
-      <button class="btn-primary" @click="openCreateDialog">
-        <i class="pi pi-plus"></i> Новый пользователь
-      </button>
-    </div>
+    <BasePageHeader
+      title="Пользователи системы"
+      subtitle="Создание учетных записей для super admin и операторов КПП."
+    >
+      <template #actions>
+        <BaseButton @click="openCreateDialog">
+          <i class="pi pi-plus"></i> Новый пользователь
+        </BaseButton>
+      </template>
+    </BasePageHeader>
 
     <div class="table-card">
       <table class="users-table">
@@ -25,18 +26,21 @@
           <tr v-for="user in users" :key="user.id">
             <td>{{ user.username }}</td>
             <td>
-              <span class="role-badge">{{ roleLabels[user.role] || user.role }}</span>
+              <StatusBadge tone="info">{{ roleLabels[user.role] || user.role }}</StatusBadge>
             </td>
             <td>{{ user.employee_name || 'Не привязан' }}</td>
             <td>
-              <span class="status-badge" :class="user.is_active ? 'active' : 'blocked'">
+              <StatusBadge :tone="user.is_active ? 'success' : 'danger'">
                 {{ user.is_active ? 'Активен' : 'Отключен' }}
-              </span>
+              </StatusBadge>
             </td>
             <td>
-              <button class="btn-icon warning" @click="openEditDialog(user)" title="Редактировать">
-                <i class="pi pi-pencil"></i>
-              </button>
+              <BaseIconButton
+                icon="pi pi-pencil"
+                label="Редактировать"
+                tone="warning"
+                @click="openEditDialog(user)"
+              />
             </td>
           </tr>
           <tr v-if="users.length === 0">
@@ -46,68 +50,29 @@
       </table>
     </div>
 
-    <div v-if="displayDialog" class="modal-overlay" @click.self="closeDialog">
-      <div class="modal-content">
-        <div class="modal-header">
-          <h2>{{ isEditMode ? 'Редактировать пользователя' : 'Новый пользователь' }}</h2>
-          <button class="btn-icon close-btn" @click="closeDialog">
-            <i class="pi pi-times"></i>
-          </button>
-        </div>
-
-        <div class="form-grid">
-          <div class="form-group">
-            <label>Логин <span class="required">*</span></label>
-            <input v-model="form.username" type="text" class="form-input" />
-          </div>
-
-          <div class="form-group">
-            <label>Роль <span class="required">*</span></label>
-            <select v-model="form.role" class="form-input">
-              <option v-for="option in roleOptions" :key="option.value" :value="option.value">
-                {{ option.label }}
-              </option>
-            </select>
-          </div>
-
-          <div class="form-group full-width">
-            <label>Привязать к сотруднику</label>
-            <select v-model="linkedEmployeeValue" class="form-input">
-              <option value="">Не привязывать</option>
-              <option v-for="employee in availableEmployees" :key="employee.id" :value="String(employee.id)">
-                {{ employee.full_name }}
-              </option>
-            </select>
-          </div>
-
-          <div class="form-group full-width">
-            <label>
-              {{ isEditMode ? 'Новый пароль' : 'Пароль' }}
-              <span v-if="!isEditMode" class="required">*</span>
-            </label>
-            <input v-model="form.password" type="password" class="form-input" />
-            <small class="field-hint">
-              {{ isEditMode ? 'Оставь пустым, если пароль менять не нужно.' : 'Минимум 6 символов.' }}
-            </small>
-          </div>
-        </div>
-
-        <div class="form-group checkbox-group">
-          <input id="userActive" v-model="form.is_active" type="checkbox" />
-          <label for="userActive">Учетная запись активна</label>
-        </div>
-
-        <div class="modal-actions">
-          <button class="btn-text" @click="closeDialog">Отмена</button>
-          <button class="btn-primary" @click="saveUser">Сохранить</button>
-        </div>
-      </div>
-    </div>
+    <UserFormModal
+      v-model:open="displayDialog"
+      v-model:username="form.username"
+      v-model:password="form.password"
+      v-model:role="form.role"
+      v-model:is-active="form.is_active"
+      v-model:employee-id="form.employee_id"
+      :is-edit-mode="isEditMode"
+      :role-options="roleOptions"
+      :available-employees="availableEmployees"
+      @close="closeDialog"
+      @save="saveUser"
+    />
   </div>
 </template>
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
+import BaseButton from '../components/ui/BaseButton.vue'
+import BaseIconButton from '../components/ui/BaseIconButton.vue'
+import BasePageHeader from '../components/ui/BasePageHeader.vue'
+import StatusBadge from '../components/ui/StatusBadge.vue'
+import UserFormModal from '../components/users/UserFormModal.vue'
 import { usersApi } from '../api/users'
 import { employeesApi } from '../api/employees'
 import { ASSIGNABLE_ROLE_OPTIONS, ROLE_LABELS } from '../constants/roles'
@@ -131,13 +96,6 @@ const form = ref({
   role: 'checkpoint_operator',
   is_active: true,
   employee_id: null,
-})
-
-const linkedEmployeeValue = computed({
-  get: () => (form.value.employee_id ? String(form.value.employee_id) : ''),
-  set: (value) => {
-    form.value.employee_id = value ? Number(value) : null
-  },
 })
 
 const availableEmployees = computed(() => {
@@ -239,38 +197,10 @@ onMounted(() => {
 
 <style scoped>
 .page-container { display: flex; flex-direction: column; gap: 1.5rem; }
-.header-actions { display: flex; justify-content: space-between; align-items: flex-start; }
-.page-title { font-size: 1.75rem; font-weight: 700; color: #0f172a; margin: 0; }
-.page-subtitle { margin-top: 0.35rem; color: #64748b; font-size: 0.95rem; }
 
 .table-card { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; overflow: hidden; }
 .users-table { width: 100%; border-collapse: collapse; }
 .users-table th, .users-table td { padding: 1rem 1.25rem; border-bottom: 1px solid #f1f5f9; text-align: left; }
 .users-table th { background: #f8fafc; color: #475569; font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.04em; }
 .empty-cell { text-align: center; color: #94a3b8; }
-
-.role-badge { display: inline-flex; align-items: center; padding: 0.35rem 0.65rem; border-radius: 999px; background: #eff6ff; color: #1d4ed8; font-size: 0.8rem; font-weight: 600; }
-.status-badge { padding: 0.35rem 0.75rem; border-radius: 999px; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.04em; }
-.status-badge.active { background: #dcfce7; color: #166534; }
-.status-badge.blocked { background: #fee2e2; color: #991b1b; }
-
-.btn-primary, .btn-text { border: none; padding: 0.7rem 1.2rem; border-radius: 10px; cursor: pointer; display: inline-flex; align-items: center; gap: 0.5rem; font-weight: 600; }
-.btn-primary { background: #2563eb; color: white; }
-.btn-text { background: transparent; color: #64748b; }
-.btn-icon { background: transparent; border: none; cursor: pointer; width: 34px; height: 34px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; }
-.btn-icon.warning { color: #f59e0b; }
-.btn-icon.warning:hover { background: #fef3c7; }
-
-.modal-overlay { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.6); display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 1rem; }
-.modal-content { width: min(560px, calc(100vw - 2rem)); background: #ffffff; border-radius: 20px; padding: 1.5rem; }
-.modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; }
-.form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
-.form-group { display: flex; flex-direction: column; gap: 0.45rem; }
-.form-group.full-width { grid-column: 1 / -1; }
-.form-input { width: 100%; border: 1px solid #cbd5e1; border-radius: 10px; padding: 0.75rem 0.9rem; background: #f8fafc; }
-.field-hint { color: #64748b; font-size: 0.8rem; }
-.required { color: #ef4444; }
-.checkbox-group { margin-top: 1rem; display: flex; align-items: center; gap: 0.6rem; }
-.modal-actions { margin-top: 1.5rem; display: flex; justify-content: flex-end; gap: 0.75rem; }
-.close-btn { color: #64748b; }
 </style>

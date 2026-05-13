@@ -1,4 +1,5 @@
 import 'primeicons/primeicons.css'
+import './styles/ui.css'
 
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'

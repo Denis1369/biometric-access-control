@@ -1,100 +1,43 @@
 <template>
   <div class="page-container">
-    <div class="header-actions">
-      <div>
-        <h1 class="page-title">Гостевые пропуска</h1>
-        <p class="page-subtitle">Выдача временных пропусков и фото-фиксация посетителей с камер проходной.</p>
-      </div>
-      <button v-if="canManageGuests" class="btn-primary" @click="openNewDialog">
-        <i class="pi pi-plus"></i> Выдать пропуск
-      </button>
-    </div>
+    <BasePageHeader
+      title="Гостевые пропуска"
+      subtitle="Выдача временных пропусков и фото-фиксация посетителей с камер проходной."
+    >
+      <template #actions>
+        <BaseButton v-if="canManageGuests" @click="openNewDialog">
+          <i class="pi pi-plus"></i> Выдать пропуск
+        </BaseButton>
+      </template>
+    </BasePageHeader>
 
-    <div class="filters-bar">
-      <div class="search-box">
-        <i class="pi pi-search"></i>
-        <input type="text" v-model="searchQuery" placeholder="Поиск по ФИО гостя или сотрудника..." />
-      </div>
-
-      <select v-model="selectedStatus" class="filter-select">
-        <option value="all">Все статусы</option>
-        <option value="active">Только активные</option>
-        <option value="expired">Истекшие / закрытые</option>
-      </select>
-
-      <select v-model="sortBy" class="filter-select">
-        <option value="newest">Сначала новые</option>
-        <option value="oldest">Сначала старые</option>
-        <option value="name">По алфавиту (ФИО)</option>
-      </select>
-    </div>
+    <GuestsFilters
+      v-model:search-query="searchQuery"
+      v-model:selected-status="selectedStatus"
+      v-model:sort-by="sortBy"
+    />
 
     <div class="cards-grid">
-      <div v-for="guest in filteredGuests" :key="guest.id" class="employee-card">
-        <div class="card-header">
-          <div class="status-badge" :class="isPassValid(guest.valid_until, guest.is_active) ? 'active' : 'blocked'">
-            {{ isPassValid(guest.valid_until, guest.is_active) ? 'ПРОПУСК АКТИВЕН' : 'ИСТЕК / ЗАКРЫТ' }}
-          </div>
-          <div class="card-actions">
-            <button
-              class="btn-icon"
-              @click="openRouteDialog(guest)"
-              title="Построить маршрут гостя"
-            >
-              <i class="pi pi-map-marker"></i>
-            </button>
-            <button
-              v-if="canManageGuests && !guest.has_body_embedding"
-              class="btn-icon"
-              @click="openBodyPhotoDialog(guest)"
-              title="Добавить фото полного роста для Re-ID"
-            >
-              <i class="pi pi-id-card"></i>
-            </button>
-            <button
-              v-if="canManageGuests && isPassValid(guest.valid_until, guest.is_active)"
-              class="btn-icon warning"
-              @click="deactivateGuest(guest.id)"
-              title="Аннулировать пропуск"
-            >
-              <i class="pi pi-ban"></i>
-            </button>
-          </div>
-        </div>
+      <GuestCard
+        v-for="guest in filteredGuests"
+        :key="guest.id"
+        :guest="guest"
+        :photo-url="getGuestPhotoUrl(guest)"
+        :pass-valid="isPassValid(guest.valid_until, guest.is_active)"
+        :valid-until-label="formatDate(guest.valid_until)"
+        :can-manage-guests="canManageGuests"
+        @build-route="openRouteDialog"
+        @add-body-photo="openBodyPhotoDialog"
+        @deactivate="deactivateGuest($event.id)"
+      />
 
-        <div class="card-body">
-          <div class="avatar-container">
-            <img v-if="guest.photo_id" :src="guestsApi.getGuestPhotoUrl(guest.photo_id)" alt="Фото гостя" class="avatar-img" />
-            <div v-else class="avatar-placeholder">
-              <i class="pi" :class="guest.has_body_embedding ? 'pi-id-card' : 'pi-user'"></i>
-            </div>
-          </div>
-
-          <h3 class="emp-name">{{ guest.last_name }} {{ guest.first_name }}</h3>
-          <p class="emp-middle-name">{{ guest.middle_name || ' ' }}</p>
-
-          <div class="guest-info">
-            <div class="info-row">
-              <i class="pi pi-user"></i>
-              <span>{{ guest.employee_name || 'Сотрудник не указан' }}</span>
-            </div>
-            <div class="info-row" :class="{ expired: !isPassValid(guest.valid_until, guest.is_active) }">
-              <i class="pi pi-clock"></i>
-              <span>До: {{ formatDate(guest.valid_until) }}</span>
-            </div>
-            <div v-if="guest.has_body_embedding" class="info-row reid-row">
-              <i class="pi pi-eye"></i>
-              <span>Re-ID по силуэту активен</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div v-if="filteredGuests.length === 0" class="empty-state">
-        <i class="pi pi-id-card empty-icon"></i>
-        <h3>Нет подходящих пропусков</h3>
-        <p>По вашему запросу ничего не найдено или список пуст.</p>
-      </div>
+      <EmptyState
+        v-if="filteredGuests.length === 0"
+        class="guest-list-empty"
+        icon="pi pi-id-card"
+        title="Нет подходящих пропусков"
+        description="По вашему запросу ничего не найдено или список пуст."
+      />
     </div>
 
     <div v-if="displayDialog" class="modal-overlay" @click.self="closeDialog">
@@ -447,6 +390,11 @@
 
 <script setup>
 import { ref, onBeforeUnmount, onMounted, computed } from 'vue'
+import BaseButton from '../components/ui/BaseButton.vue'
+import BasePageHeader from '../components/ui/BasePageHeader.vue'
+import EmptyState from '../components/ui/EmptyState.vue'
+import GuestCard from '../components/guests/GuestCard.vue'
+import GuestsFilters from '../components/guests/GuestsFilters.vue'
 import { buildingsApi } from '../api/buildings'
 import { guestsApi } from '../api/guests'
 import { camerasApi } from '../api/cameras'
@@ -677,6 +625,8 @@ const formatDate = (dateString) => {
     minute: '2-digit'
   })
 }
+
+const getGuestPhotoUrl = (guest) => (guest.photo_id ? guestsApi.getGuestPhotoUrl(guest.photo_id) : '')
 
 const toggleEmployeeDropdown = () => {
   employeeDropdownOpen.value = !employeeDropdownOpen.value
@@ -1079,50 +1029,12 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .page-container { background: transparent; height: 100%; display: flex; flex-direction: column; gap: 1.5rem; }
-.header-actions { display: flex; justify-content: space-between; align-items: flex-start; }
-.page-title { font-size: 1.75rem; font-weight: 700; color: #0f172a; margin: 0; }
-.page-subtitle { margin: 0.35rem 0 0; color: #64748b; font-size: 0.95rem; }
-
-.filters-bar { display: flex; gap: 1rem; flex-wrap: wrap; background: #ffffff; padding: 1rem; border-radius: 12px; border: 1px solid #e2e8f0; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
-.search-box { position: relative; flex: 1; min-width: 250px; }
-.search-box i { position: absolute; left: 1rem; top: 50%; transform: translateY(-50%); color: #94a3b8; }
-.search-box input { width: 100%; padding: 0.75rem 1rem 0.75rem 2.5rem; border-radius: 8px; border: 1px solid #cbd5e1; background: #f8fafc; font-size: 0.95rem; outline: none; transition: 0.2s; }
-.search-box input:focus { border-color: #3b82f6; background: #ffffff; }
-
-.filter-select { padding: 0.75rem 1rem; border-radius: 8px; border: 1px solid #cbd5e1; background: #f8fafc; color: #334155; font-size: 0.95rem; outline: none; min-width: 180px; cursor: pointer; }
-.filter-select:focus { border-color: #3b82f6; }
-
 .cards-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1.5rem; }
-.employee-card { background: #ffffff; border-radius: 16px; border: 1px solid #e2e8f0; padding: 1.5rem; transition: transform 0.2s, box-shadow 0.2s; position: relative; display: flex; flex-direction: column; }
-.employee-card:hover { transform: translateY(-3px); box-shadow: 0 10px 25px rgba(15, 23, 42, 0.08); }
-
-.card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1.5rem; }
-.status-badge { padding: 0.35rem 0.75rem; border-radius: 999px; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.05em; }
-.status-badge.active { background: #dcfce7; color: #166534; }
-.status-badge.blocked { background: #fee2e2; color: #991b1b; }
-.card-actions { display: flex; gap: 0.25rem; }
-
-.card-body { display: flex; flex-direction: column; align-items: center; text-align: center; }
-.avatar-container { margin-bottom: 1rem; }
+.guest-list-empty { grid-column: 1 / -1; background: #ffffff; border: 1px dashed #cbd5e1; border-radius: 16px; }
 .avatar-placeholder { width: 90px; height: 90px; border-radius: 50%; background: #f1f5f9; color: #94a3b8; display: flex; align-items: center; justify-content: center; font-size: 2.5rem; box-shadow: 0 4px 10px rgba(0,0,0,0.05); }
 .avatar-placeholder.large { width: 130px; height: 130px; font-size: 3.5rem; }
 .avatar-img { width: 90px; height: 90px; border-radius: 50%; object-fit: cover; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
 .avatar-img.large { width: 130px; height: 130px; }
-
-.emp-name { margin: 0 0 0.25rem 0; color: #0f172a; font-size: 1.15rem; font-weight: 700; }
-.emp-middle-name { margin: 0 0 1rem 0; color: #64748b; font-size: 0.9rem; min-height: 1.2rem; }
-
-.guest-info { width: 100%; display: flex; flex-direction: column; gap: 0.5rem; background: #f8fafc; padding: 0.75rem; border-radius: 8px; border: 1px solid #e2e8f0; }
-.info-row { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: #475569; font-weight: 500; text-align: left; }
-.info-row i { color: #3b82f6; font-size: 1rem; }
-.info-row.expired { color: #ef4444; }
-.info-row.expired i { color: #ef4444; }
-.info-row.reid-row { color: #0f766e; }
-.info-row.reid-row i { color: #0f766e; }
-
-.empty-state { grid-column: 1 / -1; display: flex; flex-direction: column; align-items: center; padding: 4rem 2rem; color: #94a3b8; background: #ffffff; border-radius: 16px; border: 1px dashed #cbd5e1; }
-.empty-icon { font-size: 3rem; margin-bottom: 1rem; color: #cbd5e1; }
-.empty-state h3 { color: #334155; margin: 0 0 0.5rem 0; }
 
 .modal-overlay { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.6); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; z-index: 1000; }
 .modal-content { background: white; padding: 2rem; border-radius: 16px; width: 100%; max-height: 90vh; overflow-y: auto; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25); }
