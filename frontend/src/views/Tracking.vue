@@ -1,63 +1,27 @@
 <template>
   <div class="page-container">
-    <div class="header-panel">
-      <div>
-        <h1 class="page-title">План здания</h1>
-        <p class="page-subtitle">Выбор здания, этажа, загрузка плана, расстановка камер и ручная разметка маршрутов.</p>
-      </div>
+    <TrackingPageHeader
+      :can-edit-plan="canEditPlan"
+      :selected-building-id="selectedBuildingId"
+      :selected-floor-id="selectedFloorId"
+      @open-building="openBuildingModal"
+      @open-floor="openFloorModal"
+      @open-floor-plan="openFloorModal(true)"
+    />
 
-      <div class="top-buttons">
-        <button v-if="canEditPlan" class="btn-secondary" @click="openBuildingModal()">
-          <i class="pi pi-building"></i> Новое здание
-        </button>
-        <button v-if="canEditPlan" class="btn-secondary" @click="openFloorModal()" :disabled="!selectedBuildingId">
-          <i class="pi pi-plus"></i> Новый этаж
-        </button>
-        <button v-if="canEditPlan" class="btn-secondary" @click="openFloorModal(true)" :disabled="!selectedFloorId">
-          <i class="pi pi-image"></i> План этажа
-        </button>
-      </div>
-    </div>
-
-    <div class="filters-row">
-      <div class="filter-group wide">
-        <label>Здание</label>
-        <select v-model="selectedBuildingId" class="form-input">
-          <option value="">Выберите здание...</option>
-          <option v-for="building in buildings" :key="building.id" :value="String(building.id)">
-            {{ building.name }}
-          </option>
-        </select>
-      </div>
-
-      <div class="filter-group wide">
-        <label>Этаж</label>
-        <select v-model="selectedFloorId" class="form-input" :disabled="!selectedBuildingId || floorsLoading">
-          <option value="">Выберите этаж...</option>
-          <option v-for="floor in floors" :key="floor.id" :value="String(floor.id)">
-            {{ floor.name }} ({{ floor.floor_number }} этаж)
-          </option>
-        </select>
-      </div>
-
-      <div class="filter-actions">
-        <button
-          v-if="canEditPlan && !isEditMode"
-          class="btn-primary"
-          @click="toggleEditMode"
-          :disabled="!selectedFloorId"
-        >
-          <i class="pi pi-pencil"></i> Редактировать камеры
-        </button>
-
-        <template v-else-if="isEditMode">
-          <button class="btn-text" @click="cancelEditMode">Отмена</button>
-          <button class="btn-success" @click="savePlan" :disabled="savingPlan || !selectedFloorId">
-            <i class="pi pi-check"></i> {{ savingPlan ? 'Сохранение...' : 'Сохранить' }}
-          </button>
-        </template>
-      </div>
-    </div>
+    <TrackingFloorControls
+      v-model:selected-building-id="selectedBuildingId"
+      v-model:selected-floor-id="selectedFloorId"
+      :buildings="buildings"
+      :floors="floors"
+      :floors-loading="floorsLoading"
+      :can-edit-plan="canEditPlan"
+      :is-edit-mode="isEditMode"
+      :saving-plan="savingPlan"
+      @toggle-edit="toggleEditMode"
+      @cancel-edit="cancelEditMode"
+      @save-plan="savePlan"
+    />
 
     <div class="tracking-grid">
       <div class="map-section">
@@ -71,39 +35,19 @@
           </span>
         </div>
 
-        <div class="route-toolbar">
-          <button
-            v-if="canEditPlan"
-            class="mode-button"
-            :class="{ active: graphMode === 'markup' }"
-            :disabled="!routeGraphAvailable || isEditMode || routeGraphLoading"
-            @click="setGraphMode('markup')"
-          >
-            Режим разметки
-          </button>
-          <button
-            class="mode-button"
-            :class="{ active: graphMode === 'path' }"
-            :disabled="!routeGraphAvailable || isEditMode || routeGraphLoading"
-            @click="setGraphMode('path')"
-          >
-            Режим маршрута
-          </button>
-          <button class="btn-text btn-compact" :disabled="!routePathNodes.length" @click="clearRoutePath">
-            Очистить маршрут
-          </button>
-          <button
-            v-if="canEditPlan"
-            class="btn-text btn-danger btn-compact"
-            :disabled="!routeNodes.length && !routeEdges.length"
-            @click="confirmClearRouteGraph"
-          >
-            Очистить граф
-          </button>
-          <span class="graph-counter">
-            {{ routeGraphLoading ? 'Загрузка графа...' : `Точек: ${routeNodes.length} · Линий: ${routeEdges.length}` }}
-          </span>
-        </div>
+        <RouteGraphToolbar
+          :can-edit-plan="canEditPlan"
+          :graph-mode="graphMode"
+          :route-graph-available="routeGraphAvailable"
+          :is-edit-mode="isEditMode"
+          :route-graph-loading="routeGraphLoading"
+          :node-count="routeNodes.length"
+          :edge-count="routeEdges.length"
+          :route-path-count="routePathNodes.length"
+          @set-graph-mode="setGraphMode"
+          @clear-route-path="clearRoutePath"
+          @clear-route-graph="confirmClearRouteGraph"
+        />
 
         <div
           class="map-container"
@@ -252,121 +196,31 @@
         </div>
       </div>
 
-      <div class="logs-section workspace-panel" v-if="!isEditMode">
-        <div class="section-header">
-          <div>
-            <h2>Камеры этажа</h2>
-            <p>Размещённые камеры и их зоны видимости.</p>
-          </div>
-          <span class="item-count">{{ mappedCameras.length }}</span>
-        </div>
+      <FloorCamerasPanel
+        v-if="!isEditMode"
+        :mapped-cameras="mappedCameras"
+        :active-camera-id="activeCameraId"
+        :camera-zones-by-camera-id="cameraZonesByCameraId"
+        :selected-floor-label="selectedFloorLabel"
+        @camera-click="onCameraCardClick"
+      />
 
-        <div class="panel-body">
-          <div class="panel-intro">
-            <div>
-              <strong>{{ mappedCameras.length }}</strong>
-              камер размещено на плане
-            </div>
-            <span>{{ selectedFloorLabel || 'Этаж не выбран' }}</span>
-          </div>
-
-          <div class="logs-list camera-list-panel">
-            <div
-              v-for="camera in mappedCameras"
-              :key="camera.id"
-              :class="['camera-card', { selected: activeCameraId === camera.id }]"
-              @click="onCameraCardClick(camera)"
-            >
-              <div class="camera-card-icon">
-                <i class="pi pi-video"></i>
-              </div>
-              <div class="camera-card-info">
-                <div class="camera-card-name">{{ camera.name }}</div>
-                <div class="camera-card-meta">
-                  X: {{ formatPercent(camera.plan_x) }} · Y: {{ formatPercent(camera.plan_y) }}
-                </div>
-                <div v-if="cameraZonesByCameraId.has(camera.id)" class="camera-card-meta zone-ready">
-                  Зона видимости задана
-                </div>
-              </div>
-            </div>
-            <div v-if="mappedCameras.length === 0" class="empty-logs">
-              На выбранном этаже камеры пока не размещены.
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div class="editor-sidebar" v-else>
-        <h2>Настройка плана</h2>
-
-        <div v-if="unassignedCameras.length > 0" class="unassigned-section">
-          <h3>Свободные камеры</h3>
-          <p class="instruction-small">Выберите камеру, чтобы разместить её на текущем этаже:</p>
-          <div class="unassigned-list">
-            <div v-for="cam in unassignedCameras" :key="cam.id" class="unassigned-card">
-              <span class="cam-name-small">{{ cam.name }}</span>
-              <button class="btn-secondary btn-sm" @click="addCameraToFloor(cam)" title="Добавить на план">
-                <i class="pi pi-plus"></i>
-              </button>
-            </div>
-          </div>
-          <hr class="sidebar-divider" />
-        </div>
-
-        <div v-if="activeCamera" class="active-cam-info">
-          <div class="info-group">
-            <label>Выбрана камера</label>
-            <div class="cam-name">{{ activeCamera.name }}</div>
-          </div>
-          <div class="info-group compact">
-            <label>IP-адрес</label>
-            <div class="cam-value">{{ activeCamera.ip_address }}</div>
-          </div>
-          <div class="info-group compact">
-            <label>Позиция на плане</label>
-            <div class="cam-value">
-              X: {{ formatPercent(activeCamera.plan_x) }} · Y: {{ formatPercent(activeCamera.plan_y) }}
-            </div>
-          </div>
-
-          <button class="btn-text btn-danger remove-btn" @click="removeCameraFromFloor(activeCamera.id)">
-            <i class="pi pi-times"></i> Убрать с плана
-          </button>
-
-          <div class="side-panel zone-editor-box">
-            <h3>Зона видимости камеры</h3>
-            <p class="instruction-small">
-              Нажмите «Задать зону», кликните 4 точки на плане. Вершины и весь полигон можно перетаскивать.
-            </p>
-            <div class="camera-card-meta">
-              {{ selectedCameraHasZone ? 'Зона сохранена' : 'Зона пока не задана' }}
-              <span v-if="zoneDraftCameraId === activeCamera.id">
-                · выбрано точек: {{ zoneDraftPoints.length }}/4
-              </span>
-            </div>
-            <div class="zone-actions">
-              <button class="btn-secondary btn-sm" @click="startZoneDraft">
-                {{ selectedCameraHasZone ? 'Редактировать зону' : 'Задать зону' }}
-              </button>
-              <button class="btn-success btn-sm" :disabled="zoneSaving || editableZonePoints.length !== 4" @click="saveActiveCameraZone">
-                Сохранить зону
-              </button>
-              <button class="btn-text btn-danger btn-sm" :disabled="!editableZonePoints.length" @click="resetActiveZoneDraft">
-                Сбросить
-              </button>
-              <button class="btn-text btn-danger btn-sm" :disabled="!selectedCameraHasZone" @click="deleteActiveCameraZone">
-                Удалить зону
-              </button>
-            </div>
-          </div>
-        </div>
-        <div v-else class="empty-selection">
-          <p class="instruction">
-            Кликните по камере на плане, чтобы выбрать её, или перетащите иконку мышкой на нужное место.
-          </p>
-        </div>
-      </div>
+      <PlanEditorSidebar
+        v-else
+        :unassigned-cameras="unassignedCameras"
+        :active-camera="activeCamera"
+        :selected-camera-has-zone="selectedCameraHasZone"
+        :zone-draft-camera-id="zoneDraftCameraId"
+        :zone-draft-points="zoneDraftPoints"
+        :zone-saving="zoneSaving"
+        :editable-zone-points="editableZonePoints"
+        @add-camera="addCameraToFloor"
+        @remove-camera="removeCameraFromFloor"
+        @start-zone-draft="startZoneDraft"
+        @save-zone="saveActiveCameraZone"
+        @reset-zone="resetActiveZoneDraft"
+        @delete-zone="deleteActiveCameraZone"
+      />
     </div>
 
     <div v-if="displayVideoDialog" class="modal-overlay" @click.self="closeVideoModal">
@@ -472,6 +326,11 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import FloorCamerasPanel from '../components/tracking/FloorCamerasPanel.vue'
+import PlanEditorSidebar from '../components/tracking/PlanEditorSidebar.vue'
+import RouteGraphToolbar from '../components/tracking/RouteGraphToolbar.vue'
+import TrackingFloorControls from '../components/tracking/TrackingFloorControls.vue'
+import TrackingPageHeader from '../components/tracking/TrackingPageHeader.vue'
 import { buildingsApi } from '../api/buildings'
 import { buildWsUrl } from '../api/client'
 import { cameraVisibilityApi } from '../api/cameraVisibility'
@@ -620,10 +479,6 @@ const selectedCameraHasZone = computed(() => Boolean(activeCameraZone.value))
 
 function clamp01(value) {
   return Math.max(0, Math.min(1, value))
-}
-
-function formatPercent(value) {
-  return typeof value === 'number' ? `${(value * 100).toFixed(1)}%` : '—'
 }
 
 function cameraStyle(camera) {
@@ -1688,14 +1543,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .page-container { height: 100%; display: flex; flex-direction: column; gap: 1rem; }
-.header-panel, .filters-row, .map-section, .logs-section, .editor-sidebar { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04); }
-.header-panel { display: flex; justify-content: space-between; align-items: flex-start; padding: 1.25rem 1.5rem; }
-.page-title { font-size: 1.5rem; font-weight: 600; color: #0f172a; margin: 0; }
-.page-subtitle { margin: 0.35rem 0 0; color: #64748b; font-size: 0.9rem; }
-.top-buttons, .filter-actions { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
-.filters-row { display: grid; grid-template-columns: minmax(190px, 1fr) minmax(190px, 1fr) auto; gap: 1rem; padding: 1rem 1.25rem; align-items: end; }
-.filter-group { display: flex; flex-direction: column; gap: 0.4rem; }
-.filter-group label { font-size: 0.85rem; color: #475569; font-weight: 600; }
+.map-section { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04); }
 .form-input { width: 100%; padding: 0.7rem 0.9rem; border-radius: 8px; border: 1px solid #cbd5e1; background: #f8fafc; font-size: 0.95rem; color: #1e293b; }
 .form-input:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12); background: #ffffff; }
 
@@ -1708,21 +1556,13 @@ onBeforeUnmount(() => {
 
 .tracking-grid { display: flex; flex-direction: row; gap: 1rem; height: fit-content; max-height: 800px; align-items: stretch; }
 .map-section { flex: 2.35; display: flex; flex-direction: column; padding: 1rem; min-height: 0; }
-.logs-section, .editor-sidebar { flex: 1; display: flex; flex-direction: column; padding: 1rem; min-height: 0; }
 .map-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem; gap: 1rem; }
-.map-header h2, .logs-section h2, .editor-sidebar h2 { margin: 0; font-size: 1.15rem; color: #0f172a; }
+.map-header h2 { margin: 0; font-size: 1.15rem; color: #0f172a; }
 .map-header p { margin: 0.25rem 0 0; color: #64748b; font-size: 0.88rem; }
 
 .plan-status { padding: 0.35rem 0.7rem; border-radius: 999px; font-size: 0.75rem; font-weight: 700; }
 .plan-status.ready { background: #dcfce7; color: #166534; }
 .plan-status.missing { background: #fef3c7; color: #92400e; }
-
-.route-toolbar { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.75rem; padding: 0.65rem; border-radius: 10px; background: #f8fafc; border: 1px solid #e2e8f0; }
-.mode-button { border: 1px solid #cbd5e1; border-radius: 999px; background: #ffffff; color: #334155; padding: 0.45rem 0.75rem; font-weight: 700; cursor: pointer; }
-.mode-button.active { border-color: #0891b2; background: #cffafe; color: #155e75; }
-.mode-button:disabled { opacity: 0.55; cursor: not-allowed; }
-.btn-compact { padding: 0.45rem 0.65rem; }
-.graph-counter { margin-left: auto; color: #475569; font-size: 0.85rem; font-weight: 700; }
 
 .map-container { position: relative; flex: 1; min-height: 520px; background: #f8fafc; border-radius: 10px; overflow: hidden; border: 1px solid #e2e8f0; }
 .map-container.is-editing { cursor: move; }
@@ -1760,49 +1600,8 @@ onBeforeUnmount(() => {
 .pulse-ring { position: absolute; inset: -2px; border: 2px solid #10b981; border-radius: 50%; animation: pulse 1.5s infinite; }
 @keyframes pulse { 0% { transform: scale(1); opacity: 1; } 100% { transform: scale(2.4); opacity: 0; } }
 
-.section-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
-.section-header p { margin: 0.25rem 0 0; color: #64748b; font-size: 0.85rem; }
-.item-count { min-width: 34px; height: 28px; padding: 0 0.6rem; border-radius: 999px; background: #dbeafe; color: #1d4ed8; display: inline-flex; align-items: center; justify-content: center; font-weight: 800; }
-.workspace-panel { gap: 0.85rem; }
-.panel-body { display: flex; flex: 1; min-height: 0; flex-direction: column; }
-.panel-intro { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.85rem; border-radius: 12px; background: linear-gradient(135deg, #eff6ff, #f8fafc); border: 1px solid #dbeafe; color: #334155; font-size: 0.88rem; }
-.panel-intro strong { color: #1d4ed8; font-size: 1.2rem; margin-right: 0.25rem; }
-.panel-intro span { color: #64748b; font-size: 0.8rem; text-align: right; }
-.logs-list { margin-top: 1rem; overflow-y: auto; display: flex; flex-direction: column; gap: 0.75rem; flex: 1; height: 0; padding-right: 0.5rem; }
-.camera-list-panel { min-height: 260px; }
-.camera-card { display: flex; gap: 0.8rem; align-items: center; padding: 0.8rem 0.9rem; border-radius: 8px; background: #f8fafc; border: 1px solid #e2e8f0; cursor: pointer; }
-.camera-card:hover { border-color: #bfdbfe; background: #eff6ff; }
-.camera-card.selected { border-color: #10b981; background: #ecfdf5; }
-.camera-card-icon { width: 34px; height: 34px; border-radius: 999px; background: #dbeafe; color: #2563eb; display: flex; align-items: center; justify-content: center; }
-.camera-card-name { color: #0f172a; font-weight: 700; }
-.camera-card-meta { margin-top: 0.2rem; color: #64748b; font-size: 0.82rem; }
-.camera-card-meta.zone-ready { color: #059669; font-weight: 700; }
-.empty-logs, .empty-selection { margin: auto 0; text-align: center; color: #94a3b8; }
-
-.side-panel { margin-top: 1rem; border-top: 1px solid #e2e8f0; padding-top: 1rem; }
-.side-panel h3 { margin: 0 0 0.65rem; color: #0f172a; font-size: 1rem; }
-.zone-editor-box { border: 1px solid #e2e8f0; border-radius: 10px; background: #f8fafc; padding: 0.85rem; }
-.zone-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.75rem; }
-.compact-form { margin-bottom: 0.65rem; }
-
-.unassigned-section { margin-bottom: 1.5rem; }
-.unassigned-section h3 { font-size: 1.05rem; margin: 0 0 0.5rem 0; color: #0f172a; }
-.instruction-small { font-size: 0.82rem; color: #64748b; margin: 0 0 0.75rem 0; line-height: 1.3; }
-.unassigned-list { display: flex; flex-direction: column; gap: 0.5rem; max-height: 220px; overflow-y: auto; padding-right: 0.25rem; }
-.unassigned-card { display: flex; justify-content: space-between; align-items: center; background: #f1f5f9; padding: 0.55rem 0.8rem; border-radius: 8px; border: 1px solid #e2e8f0; }
-.cam-name-small { font-size: 0.88rem; font-weight: 600; color: #334155; }
-.btn-sm { padding: 0.35rem 0.6rem; font-size: 0.85rem; }
 .btn-danger { color: #ef4444; }
 .btn-danger:hover { color: #dc2626; background: #fee2e2; }
-.remove-btn { margin-top: 1rem; width: 100%; justify-content: center; border: 1px solid #fecaca; }
-.sidebar-divider { border: 0; height: 1px; background: #e2e8f0; margin: 1.5rem 0; }
-
-.active-cam-info { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 1rem; }
-.info-group { margin-bottom: 1rem; }
-.info-group.compact { margin-bottom: 0.8rem; }
-.info-group label { display: block; color: #64748b; font-size: 0.82rem; margin-bottom: 0.25rem; }
-.cam-name, .cam-value { color: #0f172a; font-weight: 600; }
-.instruction { color: #475569; line-height: 1.5; margin: 0; font-size: 0.9rem; }
 
 .modal-overlay { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.55); display: flex; align-items: center; justify-content: center; z-index: 1000; }
 .modal-content { width: min(1100px, calc(100vw - 2rem)); background: #ffffff; border-radius: 16px; padding: 1.5rem; box-shadow: 0 20px 40px rgba(15, 23, 42, 0.25); }
@@ -1825,12 +1624,10 @@ onBeforeUnmount(() => {
 .modal-actions { display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 0.75rem; }
 
 @media (max-width: 1200px) {
-  .filters-row { grid-template-columns: 1fr 1fr; }
   .tracking-grid { flex-direction: column; max-height: none; }
   .map-container { min-height: 420px; }
 }
 @media (max-width: 768px) {
-  .header-panel { flex-direction: column; gap: 1rem; }
-  .filters-row, .form-grid { grid-template-columns: 1fr; }
+  .form-grid { grid-template-columns: 1fr; }
 }
 </style>
