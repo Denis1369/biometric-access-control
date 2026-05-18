@@ -5,7 +5,7 @@
       subtitle="Выдача временных пропусков и фото-фиксация посетителей с камер проходной."
     >
       <template #actions>
-        <BaseButton v-if="canManageGuests" @click="openNewDialog">
+        <BaseButton v-if="canIssueGuestPass" @click="openNewDialog">
           <i class="pi pi-plus"></i> Выдать пропуск
         </BaseButton>
       </template>
@@ -25,7 +25,9 @@
         :photo-url="getGuestPhotoUrl(guest)"
         :pass-valid="isPassValid(guest.valid_until, guest.is_active)"
         :valid-until-label="formatDate(guest.valid_until)"
-        :can-manage-guests="canManageGuests"
+        :can-build-route="canBuildGuestRoutes"
+        :can-add-body-photo="canAddGuestBodyPhoto"
+        :can-deactivate="canDeactivateGuestPass"
         @build-route="openRouteDialog"
         @add-body-photo="openBodyPhotoDialog"
         @deactivate="deactivateGuest($event.id)"
@@ -218,6 +220,8 @@
       :job-loading="routeJobLoading"
       :result-loading="routeResultLoading"
       :result="routeResult"
+      :can-build-from-journal="canBuildGuestRoutes"
+      :can-start-analysis="canAnalyzeGuestRoutes"
       @close="closeRouteDialog"
       @floor-change="onRouteFloorChange"
       @build-from-journal="buildRouteFromJournal"
@@ -240,6 +244,7 @@ import { camerasApi } from '../api/cameras'
 import { employeesApi } from '../api/employees'
 import { floorsApi } from '../api/floors'
 import { guestRoutesApi } from '../api/guestRoutes'
+import { PERMISSIONS } from '../constants/roles'
 import { createJsonWebSocket } from '../services/jsonWebSocket'
 import { useAuth } from '../services/auth'
 import { useUi } from '../services/ui'
@@ -248,7 +253,14 @@ defineOptions({ name: 'GuestsPage' })
 
 const auth = useAuth()
 const ui = useUi()
-const canManageGuests = computed(() => auth.hasAnyRole('super_admin', 'checkpoint_operator'))
+const canIssueGuestPass = computed(() => (
+  auth.hasPermission(PERMISSIONS.GUESTS_WRITE) &&
+  auth.hasPermission(PERMISSIONS.GUEST_PASSES_ISSUE)
+))
+const canAddGuestBodyPhoto = computed(() => auth.hasPermission(PERMISSIONS.GUESTS_WRITE))
+const canDeactivateGuestPass = computed(() => auth.hasPermission(PERMISSIONS.GUEST_PASSES_CLOSE))
+const canBuildGuestRoutes = computed(() => auth.hasPermission(PERMISSIONS.GUEST_ROUTES_READ))
+const canAnalyzeGuestRoutes = computed(() => auth.hasPermission(PERMISSIONS.GUEST_ROUTES_ANALYZE_VIDEO))
 
 const guests = ref([])
 const cameras = ref([])
@@ -310,11 +322,11 @@ const parseLocalDate = (dateString) => {
 const loadData = async () => {
   try {
     const [camerasRes, guestsRes, employeesRes, buildingsRes, floorsRes] = await Promise.all([
-      camerasApi.getCameras(),
+      canIssueGuestPass.value ? camerasApi.getCameras() : Promise.resolve({ data: [] }),
       guestsApi.getGuests(),
-      employeesApi.getEmployees(0, 1000),
-      buildingsApi.getBuildings(),
-      floorsApi.getFloors(),
+      canIssueGuestPass.value ? employeesApi.getEmployees(0, 1000) : Promise.resolve({ data: [] }),
+      canBuildGuestRoutes.value ? buildingsApi.getBuildings() : Promise.resolve({ data: [] }),
+      canBuildGuestRoutes.value ? floorsApi.getFloors() : Promise.resolve({ data: [] }),
     ])
 
     cameras.value = camerasRes.data
@@ -467,7 +479,7 @@ const takeSnapshot = async () => {
 }
 
 const openNewDialog = () => {
-  if (!canManageGuests.value) return
+  if (!canIssueGuestPass.value) return
   revokePreview(facePhotoPreview)
   revokePreview(bodyPhotoPreview)
   if (faceFileInput.value) faceFileInput.value.value = ''
@@ -501,7 +513,7 @@ const closeDialog = () => {
 }
 
 const saveGuest = async () => {
-  if (!canManageGuests.value) return
+  if (!canIssueGuestPass.value) return
   if (!guestForm.value.last_name || !guestForm.value.first_name || !guestForm.value.valid_until || !guestForm.value.employee_id) {
     ui.warn('Заполните обязательные поля: фамилия, имя, к кому пришли и срок действия')
     return
@@ -532,7 +544,7 @@ const saveGuest = async () => {
 }
 
 const openBodyPhotoDialog = (guest) => {
-  if (!canManageGuests.value) return
+  if (!canAddGuestBodyPhoto.value) return
   bodyPhotoGuest.value = guest
   bodyEnrollmentFile.value = null
   revokePreview(bodyEnrollmentPreview)
@@ -556,6 +568,7 @@ const onBodyEnrollmentFileSelected = (event) => {
 }
 
 const saveGuestBodyPhoto = async () => {
+  if (!canAddGuestBodyPhoto.value) return
   if (!bodyPhotoGuest.value || !bodyEnrollmentFile.value) return
   bodyPhotoSaving.value = true
   try {
@@ -622,6 +635,7 @@ const clearRouteJobSubscription = () => {
 }
 
 const openRouteDialog = (guest) => {
+  if (!canBuildGuestRoutes.value) return
   routeGuest.value = guest
   routeJob.value = null
   routeResult.value = null
@@ -644,6 +658,7 @@ const closeRouteDialog = () => {
 }
 
 const buildRouteFromJournal = async () => {
+  if (!canBuildGuestRoutes.value) return
   if (!routeGuest.value || !routeFloorId.value) return
   routeResultLoading.value = true
   try {
@@ -725,6 +740,7 @@ const subscribeRouteJob = (jobId) => {
 }
 
 const startGuestRouteAnalysis = async () => {
+  if (!canAnalyzeGuestRoutes.value) return
   if (!routeGuest.value || !routeFloorId.value) return
   if (!routeGuest.value.has_body_embedding) {
     ui.warn('Для анализа видео добавьте гостю фото полного роста для Re-ID')
@@ -745,7 +761,7 @@ const startGuestRouteAnalysis = async () => {
 }
 
 const deactivateGuest = async (id) => {
-  if (!canManageGuests.value) return
+  if (!canDeactivateGuestPass.value) return
   const accepted = await ui.confirm({
     header: 'Аннулировать пропуск?',
     message: 'Гость больше не сможет пройти через турникет.',

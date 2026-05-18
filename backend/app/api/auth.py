@@ -4,6 +4,7 @@ from sqlmodel import Session, SQLModel, select
 
 from app.core.database import get_session
 from app.core.deps import get_current_user
+from app.core.permissions import get_permissions_for_role
 from app.core.security import create_access_token, verify_password
 from app.models.user import User, UserRole
 
@@ -22,6 +23,7 @@ class CurrentUserResponse(SQLModel):
     id: int
     username: str
     role: UserRole
+    permissions: list[str]
     is_active: bool
     employee_id: int | None = None
 
@@ -67,6 +69,7 @@ def me(current_user: User = Depends(get_current_user)):
         id=current_user.id,
         username=current_user.username,
         role=current_user.role,
+        permissions=sorted(get_permissions_for_role(current_user.role)),
         is_active=current_user.is_active,
         employee_id=current_user.employee_id,
     )

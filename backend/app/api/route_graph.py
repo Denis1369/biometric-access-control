@@ -4,10 +4,10 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlmodel import Field, SQLModel, Session
 
 from app.core.database import get_session
-from app.core.deps import require_roles
+from app.core.deps import require_permissions
+from app.core.permissions import ROUTE_GRAPH_READ, ROUTE_GRAPH_WRITE
 from app.models.route_edges import RouteEdge
 from app.models.route_nodes import RouteNode
-from app.models.user import UserRole
 from app.services.route_graph_service import (
     RouteGraphError,
     RouteNotFoundError,
@@ -22,15 +22,6 @@ from app.services.route_graph_service import (
 )
 
 router = APIRouter(prefix="/api", tags=["Граф маршрутов"])
-
-READ_ROLES = (
-    UserRole.SUPER_ADMIN,
-    UserRole.CHECKPOINT_OPERATOR,
-)
-WRITE_ROLES = (
-    UserRole.SUPER_ADMIN,
-)
-
 
 class RouteNodeCreate(SQLModel):
     x: float = Field(ge=0)
@@ -137,7 +128,7 @@ def _raise_http_error(error: RouteGraphError):
     "/floors/{floor_id}/route-graph",
     response_model=RouteGraphRead,
     summary="Получить граф маршрутов этажа",
-    dependencies=[Depends(require_roles(*READ_ROLES))],
+    dependencies=[Depends(require_permissions(ROUTE_GRAPH_READ))],
 )
 def get_route_graph(floor_id: int, session: Session = Depends(get_session)):
     try:
@@ -156,7 +147,7 @@ def get_route_graph(floor_id: int, session: Session = Depends(get_session)):
     response_model=RouteNodeRead,
     status_code=status.HTTP_201_CREATED,
     summary="Создать точку маршрута",
-    dependencies=[Depends(require_roles(*WRITE_ROLES))],
+    dependencies=[Depends(require_permissions(ROUTE_GRAPH_WRITE))],
 )
 def create_node(
     floor_id: int,
@@ -174,7 +165,7 @@ def create_node(
     "/route-nodes/{node_id}",
     response_model=RouteNodeRead,
     summary="Обновить координаты точки маршрута",
-    dependencies=[Depends(require_roles(*WRITE_ROLES))],
+    dependencies=[Depends(require_permissions(ROUTE_GRAPH_WRITE))],
 )
 def update_node(
     node_id: int,
@@ -198,7 +189,7 @@ def update_node(
     "/route-nodes/{node_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Удалить точку маршрута",
-    dependencies=[Depends(require_roles(*WRITE_ROLES))],
+    dependencies=[Depends(require_permissions(ROUTE_GRAPH_WRITE))],
 )
 def delete_node(node_id: int, session: Session = Depends(get_session)):
     try:
@@ -212,7 +203,7 @@ def delete_node(node_id: int, session: Session = Depends(get_session)):
     "/floors/{floor_id}/route-edges",
     response_model=RouteEdgeRead,
     summary="Создать линию маршрута",
-    dependencies=[Depends(require_roles(*WRITE_ROLES))],
+    dependencies=[Depends(require_permissions(ROUTE_GRAPH_WRITE))],
 )
 def create_edge(
     floor_id: int,
@@ -236,7 +227,7 @@ def create_edge(
     "/route-edges/{edge_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Удалить линию маршрута",
-    dependencies=[Depends(require_roles(*WRITE_ROLES))],
+    dependencies=[Depends(require_permissions(ROUTE_GRAPH_WRITE))],
 )
 def delete_edge(edge_id: int, session: Session = Depends(get_session)):
     try:
@@ -250,7 +241,7 @@ def delete_edge(edge_id: int, session: Session = Depends(get_session)):
     "/floors/{floor_id}/route-graph",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Очистить граф маршрутов этажа",
-    dependencies=[Depends(require_roles(*WRITE_ROLES))],
+    dependencies=[Depends(require_permissions(ROUTE_GRAPH_WRITE))],
 )
 def clear_graph(floor_id: int, session: Session = Depends(get_session)):
     try:
@@ -264,7 +255,7 @@ def clear_graph(floor_id: int, session: Session = Depends(get_session)):
     "/floors/{floor_id}/route-path",
     response_model=RoutePathRead,
     summary="Построить кратчайший маршрут по графу этажа",
-    dependencies=[Depends(require_roles(*READ_ROLES))],
+    dependencies=[Depends(require_permissions(ROUTE_GRAPH_READ))],
 )
 def build_route_path(
     floor_id: int,

@@ -10,8 +10,9 @@ from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFil
 from sqlmodel import Session, SQLModel, select
 
 from app.core.database import get_session
-from app.core.deps import get_current_user, require_roles
-from app.models.user import User, UserRole
+from app.core.deps import get_current_user, require_permissions
+from app.core.permissions import VIDEO_ANALYSIS_READ, VIDEO_ANALYSIS_WRITE
+from app.models.user import User
 from app.models.video_analysis import VideoAnalysisEvent, VideoAnalysisJob
 from app.services.video_analysis_service import (
     BASE_STORAGE_DIR,
@@ -22,11 +23,6 @@ from app.services.video_analysis_service import (
 
 router = APIRouter(prefix="/api/video-analysis", tags=["Анализ видео"])
 logger = logging.getLogger(__name__)
-
-ALLOWED_ROLES = (
-    UserRole.SUPER_ADMIN,
-    UserRole.CHECKPOINT_OPERATOR,
-)
 
 VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".webm"}
 
@@ -86,7 +82,7 @@ def _event_read(event: VideoAnalysisEvent) -> VideoAnalysisEventRead:
 @router.get(
     "/jobs",
     response_model=List[VideoAnalysisJobRead],
-    dependencies=[Depends(require_roles(*ALLOWED_ROLES))],
+    dependencies=[Depends(require_permissions(VIDEO_ANALYSIS_READ))],
 )
 def get_jobs(session: Session = Depends(get_session)):
     jobs = session.exec(select(VideoAnalysisJob).order_by(VideoAnalysisJob.created_at.desc())).all()
@@ -96,7 +92,7 @@ def get_jobs(session: Session = Depends(get_session)):
 @router.get(
     "/jobs/{job_id}",
     response_model=VideoAnalysisJobRead,
-    dependencies=[Depends(require_roles(*ALLOWED_ROLES))],
+    dependencies=[Depends(require_permissions(VIDEO_ANALYSIS_READ))],
 )
 def get_job(job_id: int, session: Session = Depends(get_session)):
     job = session.get(VideoAnalysisJob, job_id)
@@ -108,7 +104,7 @@ def get_job(job_id: int, session: Session = Depends(get_session)):
 @router.get(
     "/jobs/{job_id}/events",
     response_model=List[VideoAnalysisEventRead],
-    dependencies=[Depends(require_roles(*ALLOWED_ROLES))],
+    dependencies=[Depends(require_permissions(VIDEO_ANALYSIS_READ))],
 )
 def get_job_events(job_id: int, session: Session = Depends(get_session)):
     job = session.get(VideoAnalysisJob, job_id)
@@ -125,7 +121,7 @@ def get_job_events(job_id: int, session: Session = Depends(get_session)):
 @router.post(
     "/jobs/{job_id}/rerun",
     response_model=VideoAnalysisJobRead,
-    dependencies=[Depends(require_roles(*ALLOWED_ROLES))],
+    dependencies=[Depends(require_permissions(VIDEO_ANALYSIS_WRITE))],
 )
 def rerun_job(job_id: int, session: Session = Depends(get_session)):
     job = session.get(VideoAnalysisJob, job_id)
@@ -149,7 +145,7 @@ def rerun_job(job_id: int, session: Session = Depends(get_session)):
 
 @router.get(
     "/events/{event_id}/preview",
-    dependencies=[Depends(require_roles(*ALLOWED_ROLES))],
+    dependencies=[Depends(require_permissions(VIDEO_ANALYSIS_READ))],
 )
 def get_event_preview(event_id: int, session: Session = Depends(get_session)):
     event = session.get(VideoAnalysisEvent, event_id)
@@ -167,7 +163,7 @@ def get_event_preview(event_id: int, session: Session = Depends(get_session)):
     "/jobs",
     response_model=VideoAnalysisJobRead,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_roles(*ALLOWED_ROLES))],
+    dependencies=[Depends(require_permissions(VIDEO_ANALYSIS_WRITE))],
 )
 async def create_job(
     video: UploadFile = File(...),

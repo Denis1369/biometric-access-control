@@ -59,7 +59,7 @@ import { computed } from 'vue'
 import ConfirmDialog from 'primevue/confirmdialog'
 import Toast from 'primevue/toast'
 import { useRoute, useRouter } from 'vue-router'
-import { ROLE_LABELS } from './constants/roles'
+import { PERMISSIONS, ROLE_LABELS } from './constants/roles'
 import { useAuth } from './services/auth'
 
 const auth = useAuth()
@@ -67,18 +67,20 @@ const route = useRoute()
 const router = useRouter()
 
 const navItems = [
-  { to: '/', label: 'Дашборд', icon: 'pi pi-home', roles: ['super_admin'] },
-  { to: '/employees', label: 'Сотрудники', icon: 'pi pi-users', roles: ['super_admin'] },
-  { to: '/cameras', label: 'Камеры', icon: 'pi pi-video', roles: ['super_admin', 'checkpoint_operator'] },
-  { to: '/route', label: 'Проходная', icon: 'pi pi-sign-in', roles: ['super_admin', 'checkpoint_operator'] },
-  { to: '/tracking', label: 'План здания', icon: 'pi pi-building', roles: ['super_admin', 'checkpoint_operator'] },
-  { to: '/video-analysis', label: 'Анализ видео', icon: 'pi pi-play-circle', roles: ['super_admin', 'checkpoint_operator'] },
-  { to: '/guests', label: 'Гости', icon: 'pi pi-user-plus', roles: ['super_admin', 'checkpoint_operator'] },
-  { to: '/departments', label: 'Отделы', icon: 'pi pi-sitemap', roles: ['super_admin'] },
-  { to: '/users', label: 'Пользователи', icon: 'pi pi-lock', roles: ['super_admin'] },
+  { to: '/', label: 'Дашборд', icon: 'pi pi-home', permissions: [PERMISSIONS.DASHBOARD_READ] },
+  { to: '/employees', label: 'Сотрудники', icon: 'pi pi-users', permissions: [PERMISSIONS.EMPLOYEES_READ] },
+  { to: '/cameras', label: 'Камеры', icon: 'pi pi-video', permissions: [PERMISSIONS.CAMERAS_READ] },
+  { to: '/route', label: 'Проходная', icon: 'pi pi-sign-in', permissions: [PERMISSIONS.CHECKPOINT_READ] },
+  { to: '/tracking', label: 'План здания', icon: 'pi pi-building', permissions: [PERMISSIONS.FLOOR_MAP_VIEW] },
+  { to: '/video-analysis', label: 'Анализ видео', icon: 'pi pi-play-circle', permissions: [PERMISSIONS.VIDEO_ANALYSIS_READ] },
+  { to: '/guests', label: 'Гости', icon: 'pi pi-user-plus', permissions: [PERMISSIONS.GUESTS_READ] },
+  { to: '/departments', label: 'Отделы', icon: 'pi pi-sitemap', permissions: [PERMISSIONS.DEPARTMENTS_READ] },
+  { to: '/users', label: 'Пользователи', icon: 'pi pi-lock', permissions: [PERMISSIONS.USERS_MANAGE] },
 ]
 
-const visibleNavItems = computed(() => navItems.filter((item) => auth.hasAnyRole(...item.roles)))
+const visibleNavItems = computed(() => (
+  navItems.filter((item) => item.permissions.every((permission) => auth.hasPermission(permission)))
+))
 const currentRoleLabel = computed(() => ROLE_LABELS[auth.role.value] || 'Пользователь')
 
 function handleLogout() {

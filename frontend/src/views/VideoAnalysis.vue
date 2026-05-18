@@ -8,7 +8,7 @@
           и сохранит превью для защиты практики.
         </p>
       </div>
-      <div class="header-actions">
+      <div v-if="canManageVideoAnalysis" class="header-actions">
         <label class="upload-btn">
           <input type="file" accept="video/mp4,video/avi,video/mov,video/mkv,video/webm" @change="onFileChange" hidden />
           <i class="pi pi-upload"></i>
@@ -81,7 +81,7 @@
               </p>
             </div>
             <div class="details-actions">
-              <button class="btn-text" :disabled="rerunning || isSelectedJobBusy" @click="rerunSelectedJob">
+              <button v-if="canManageVideoAnalysis" class="btn-text" :disabled="rerunning || isSelectedJobBusy" @click="rerunSelectedJob">
                 <i class="pi pi-replay"></i>
                 {{ rerunning ? 'Перезапуск...' : 'Повторный анализ' }}
               </button>
@@ -165,10 +165,14 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { videoAnalysisApi } from '../api/videoAnalysis'
+import { PERMISSIONS } from '../constants/roles'
 import { createJsonWebSocket } from '../services/jsonWebSocket'
+import { useAuth } from '../services/auth'
 import { useUi } from '../services/ui'
 
 const ui = useUi()
+const auth = useAuth()
+const canManageVideoAnalysis = computed(() => auth.hasPermission(PERMISSIONS.VIDEO_ANALYSIS_WRITE))
 const jobs = ref([])
 const events = ref([])
 const selectedJob = ref(null)
@@ -349,6 +353,7 @@ async function selectJob(jobId) {
 }
 
 async function rerunSelectedJob() {
+  if (!canManageVideoAnalysis.value) return
   if (!selectedJob.value || isSelectedJobBusy.value) return
   rerunning.value = true
   try {
@@ -370,6 +375,7 @@ function onFileChange(event) {
 }
 
 async function uploadVideo() {
+  if (!canManageVideoAnalysis.value) return
   if (!selectedFile.value) return
   uploading.value = true
   try {

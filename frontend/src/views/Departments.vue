@@ -34,7 +34,7 @@
           </div>
         </template>
       </Column>
-      <Column header="Действия" style="width: 10%">
+      <Column v-if="canManageDepartments" header="Действия" style="width: 10%">
         <template #body="slotProps">
           <div v-if="canManageDepartments" class="action-buttons">
             <button class="btn-icon warning" @click="openEditDialog(slotProps.data)" title="Настроить отдел и должности">
@@ -143,6 +143,7 @@ import DataTable from 'primevue/datatable'
 import Column from 'primevue/column'
 import { departmentsApi } from '../api/departments'
 import { jobPositionsApi } from '../api/jobPositions'
+import { PERMISSIONS } from '../constants/roles'
 import { useAuth } from '../services/auth'
 import { useUi } from '../services/ui'
 
@@ -150,7 +151,7 @@ defineOptions({ name: 'DepartmentsPage' })
 
 const auth = useAuth()
 const ui = useUi()
-const canManageDepartments = computed(() => auth.hasAnyRole('super_admin'))
+const canManageDepartments = computed(() => auth.hasPermission(PERMISSIONS.DEPARTMENTS_WRITE))
 
 const departments = ref([])
 const allPositions = ref([])
@@ -172,7 +173,7 @@ const loadData = async () => {
   try {
     const [deptRes, posRes] = await Promise.all([
       departmentsApi.getDepartments(),
-      jobPositionsApi.getJobPositions(true)
+      canManageDepartments.value ? jobPositionsApi.getJobPositions(true) : Promise.resolve({ data: [] })
     ])
     departments.value = deptRes.data
     allPositions.value = posRes.data
@@ -228,6 +229,7 @@ const resetPositionForm = () => { positionForm.value = { id: null, name: '', sor
 const editPosition = (pos) => { positionForm.value = { ...pos } }
 
 const savePosition = async () => {
+  if (!canManageDepartments.value) return
   if (!positionForm.value.name.trim()) return ui.warn('Введите название должности')
   const isEditingPosition = Boolean(positionForm.value.id)
   try {
@@ -250,6 +252,7 @@ const savePosition = async () => {
 }
 
 const togglePositionArchive = async (pos) => {
+  if (!canManageDepartments.value) return
   try {
     await jobPositionsApi.updateJobPosition(pos.id, { is_active: !pos.is_active })
     await loadData()

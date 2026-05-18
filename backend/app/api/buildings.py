@@ -6,22 +6,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Field, Session, SQLModel, select
 
 from app.core.database import get_session
-from app.core.deps import require_roles
+from app.core.deps import require_permissions
+from app.core.permissions import BUILDINGS_READ, BUILDINGS_WRITE
 from app.models.buildings import Building
 from app.models.cameras import Camera
 from app.models.floors import Floor
-from app.models.user import UserRole
 
 router = APIRouter(prefix="/api/buildings", tags=["Здания"])
-
-READ_ROLES = (
-    UserRole.SUPER_ADMIN,
-    UserRole.CHECKPOINT_OPERATOR,
-)
-WRITE_ROLES = (
-    UserRole.SUPER_ADMIN,
-)
-
 
 class BuildingCreate(SQLModel):
     name: str = Field(min_length=1)
@@ -55,7 +46,7 @@ def _normalize_required_name(value: str, field_name: str) -> str:
     response_model=List[BuildingRead],
     summary="Получить список зданий",
     description="Возвращает список всех зданий.",
-    dependencies=[Depends(require_roles(*READ_ROLES))],
+    dependencies=[Depends(require_permissions(BUILDINGS_READ))],
 )
 def get_buildings(session: Session = Depends(get_session)):
     statement = select(Building).order_by(Building.name.asc())
@@ -67,7 +58,7 @@ def get_buildings(session: Session = Depends(get_session)):
     response_model=BuildingRead,
     summary="Получить здание по ID",
     description="Возвращает карточку здания.",
-    dependencies=[Depends(require_roles(*READ_ROLES))],
+    dependencies=[Depends(require_permissions(BUILDINGS_READ))],
 )
 def get_building(building_id: int, session: Session = Depends(get_session)):
     building = session.get(Building, building_id)
@@ -85,7 +76,7 @@ def get_building(building_id: int, session: Session = Depends(get_session)):
     status_code=status.HTTP_201_CREATED,
     summary="Создать здание",
     description="Создает новое здание.",
-    dependencies=[Depends(require_roles(*WRITE_ROLES))],
+    dependencies=[Depends(require_permissions(BUILDINGS_WRITE))],
 )
 def create_building(payload: BuildingCreate, session: Session = Depends(get_session)):
     building = Building(
@@ -111,7 +102,7 @@ def create_building(payload: BuildingCreate, session: Session = Depends(get_sess
     response_model=BuildingRead,
     summary="Обновить здание",
     description="Обновляет название и адрес здания.",
-    dependencies=[Depends(require_roles(*WRITE_ROLES))],
+    dependencies=[Depends(require_permissions(BUILDINGS_WRITE))],
 )
 def update_building(
     building_id: int,

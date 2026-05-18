@@ -6,9 +6,17 @@ from fastapi.encoders import jsonable_encoder
 from sqlmodel import Session
 
 from app.core.database import engine
+from app.core.permissions import (
+    ACCESS_LOGS_READ,
+    ACCESS_LOGS_READ_RECENT,
+    CAMERA_SNAPSHOT_READ,
+    GUEST_ROUTES_ANALYZE_VIDEO,
+    VIDEO_ANALYSIS_READ,
+    get_permissions_for_role,
+)
 from app.core.security import decode_access_token_subject
 from app.models.guest_route_analysis_jobs import GuestRouteAnalysisJob
-from app.models.user import User, UserRole
+from app.models.user import User
 from app.models.video_analysis import VideoAnalysisJob
 from app.services.access_log_service import get_recent_access_logs
 from app.services.guest_route_analysis_service import build_job_payload
@@ -23,12 +31,6 @@ from app.services.websocket_manager import (
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-
-
-ALLOWED_ROLES = {
-    UserRole.SUPER_ADMIN,
-    UserRole.CHECKPOINT_OPERATOR,
-}
 
 
 def _get_user_from_token(token: str | None) -> User | None:
@@ -46,10 +48,11 @@ def _get_user_from_token(token: str | None) -> User | None:
         return user
 
 
-async def _reject_unauthorized(websocket: WebSocket) -> bool:
+async def _reject_unauthorized(websocket: WebSocket, *allowed_permissions: str) -> bool:
     token = websocket.query_params.get("token")
     user = _get_user_from_token(token)
-    if not user or user.role not in ALLOWED_ROLES:
+    permissions = get_permissions_for_role(user.role) if user else frozenset()
+    if not user or not any(permission in permissions for permission in allowed_permissions):
         await websocket.close(code=1008)
         return True
     return False
@@ -76,7 +79,7 @@ async def _keep_subscription_alive(websocket: WebSocket, topic: str, initial_pay
 
 @router.websocket("/ws/video/{camera_id}")
 async def video_endpoint(websocket: WebSocket, camera_id: int):
-    if await _reject_unauthorized(websocket):
+    if await _reject_unauthorized(websocket, CAMERA_SNAPSHOT_READ):
         return
 
     await websocket.accept()
@@ -113,7 +116,7 @@ async def video_endpoint(websocket: WebSocket, camera_id: int):
 
 @router.websocket("/ws/guest-route-analysis-jobs/{job_id}")
 async def guest_route_analysis_job_endpoint(websocket: WebSocket, job_id: int):
-    if await _reject_unauthorized(websocket):
+    if await _reject_unauthorized(websocket, GUEST_ROUTES_ANALYZE_VIDEO):
         return
 
     with Session(engine) as session:
@@ -132,7 +135,7 @@ async def guest_route_analysis_job_endpoint(websocket: WebSocket, job_id: int):
 
 @router.websocket("/ws/video-analysis/jobs/{job_id}")
 async def video_analysis_job_endpoint(websocket: WebSocket, job_id: int):
-    if await _reject_unauthorized(websocket):
+    if await _reject_unauthorized(websocket, VIDEO_ANALYSIS_READ):
         return
 
     with Session(engine) as session:
@@ -151,7 +154,7 @@ async def video_analysis_job_endpoint(websocket: WebSocket, job_id: int):
 
 @router.websocket("/ws/access-logs")
 async def access_logs_endpoint(websocket: WebSocket):
-    if await _reject_unauthorized(websocket):
+    if await _reject_unauthorized(websocket, ACCESS_LOGS_READ, ACCESS_LOGS_READ_RECENT):
         return
 
     with Session(engine) as session:

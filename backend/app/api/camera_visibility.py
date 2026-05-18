@@ -5,22 +5,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Field, SQLModel, Session, select
 
 from app.core.database import get_session
-from app.core.deps import require_roles
+from app.core.deps import require_permissions
+from app.core.permissions import CAMERA_ZONES_READ, CAMERA_ZONES_WRITE
 from app.models.camera_visibility_zones import CameraVisibilityZone
 from app.models.cameras import Camera
 from app.models.floors import Floor
-from app.models.user import UserRole
 
 router = APIRouter(prefix="/api", tags=["Зоны видимости камер"])
-
-READ_ROLES = (
-    UserRole.SUPER_ADMIN,
-    UserRole.CHECKPOINT_OPERATOR,
-)
-WRITE_ROLES = (
-    UserRole.SUPER_ADMIN,
-)
-
 
 class CameraZonePoint(SQLModel):
     x: float = Field(ge=0)
@@ -70,7 +61,7 @@ def _validate_points(points: list[CameraZonePoint]) -> list[dict[str, float]]:
     "/floors/{floor_id}/camera-visibility-zones",
     response_model=FloorCameraZonesRead,
     summary="Получить зоны видимости камер этажа",
-    dependencies=[Depends(require_roles(*READ_ROLES))],
+    dependencies=[Depends(require_permissions(CAMERA_ZONES_READ))],
 )
 def get_floor_camera_zones(floor_id: int, session: Session = Depends(get_session)):
     floor = session.get(Floor, floor_id)
@@ -96,7 +87,7 @@ def get_floor_camera_zones(floor_id: int, session: Session = Depends(get_session
     "/cameras/{camera_id}/visibility-zone",
     response_model=CameraZoneRead | None,
     summary="Получить зону видимости камеры",
-    dependencies=[Depends(require_roles(*READ_ROLES))],
+    dependencies=[Depends(require_permissions(CAMERA_ZONES_READ))],
 )
 def get_camera_zone(camera_id: int, session: Session = Depends(get_session)):
     camera = session.get(Camera, camera_id)
@@ -118,7 +109,7 @@ def get_camera_zone(camera_id: int, session: Session = Depends(get_session)):
     "/cameras/{camera_id}/visibility-zone",
     response_model=CameraZoneRead,
     summary="Создать или обновить зону видимости камеры",
-    dependencies=[Depends(require_roles(*WRITE_ROLES))],
+    dependencies=[Depends(require_permissions(CAMERA_ZONES_WRITE))],
 )
 def upsert_camera_zone(
     camera_id: int,
@@ -177,7 +168,7 @@ def upsert_camera_zone(
     "/cameras/{camera_id}/visibility-zone",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Удалить зону видимости камеры",
-    dependencies=[Depends(require_roles(*WRITE_ROLES))],
+    dependencies=[Depends(require_permissions(CAMERA_ZONES_WRITE))],
 )
 def delete_camera_zone(camera_id: int, session: Session = Depends(get_session)):
     camera = session.get(Camera, camera_id)

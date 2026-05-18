@@ -5,20 +5,11 @@ from sqlmodel import Field, SQLModel
 from sqlmodel import Session, select
 
 from app.core.database import get_session
-from app.core.deps import require_roles
+from app.core.deps import require_permissions
+from app.core.permissions import JOB_POSITIONS_READ, JOB_POSITIONS_WRITE
 from app.models.job_positions import JobPosition
-from app.models.user import UserRole
 
 router = APIRouter(prefix="/api/job-positions", tags=["Должности"])
-
-READ_ROLES = (
-    UserRole.SUPER_ADMIN,
-    UserRole.CHECKPOINT_OPERATOR,
-)
-WRITE_ROLES = (
-    UserRole.SUPER_ADMIN,
-)
-
 
 class JobPositionCreate(SQLModel):
     name: str = Field(min_length=1)
@@ -43,7 +34,7 @@ def _normalize_required_name(value: str) -> str:
 @router.get(
     "/",
     response_model=List[JobPosition],
-    dependencies=[Depends(require_roles(*READ_ROLES))],
+    dependencies=[Depends(require_permissions(JOB_POSITIONS_READ))],
 )
 def get_job_positions(only_active: bool = False, session: Session = Depends(get_session)):
     query = select(JobPosition)
@@ -57,7 +48,7 @@ def get_job_positions(only_active: bool = False, session: Session = Depends(get_
     "/",
     response_model=JobPosition,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_roles(*WRITE_ROLES))],
+    dependencies=[Depends(require_permissions(JOB_POSITIONS_WRITE))],
 )
 def create_job_position(
     position_data: JobPositionCreate,
@@ -78,7 +69,7 @@ def create_job_position(
 @router.patch(
     "/{position_id}",
     response_model=JobPosition,
-    dependencies=[Depends(require_roles(*WRITE_ROLES))],
+    dependencies=[Depends(require_permissions(JOB_POSITIONS_WRITE))],
 )
 def update_job_position(
     position_id: int,

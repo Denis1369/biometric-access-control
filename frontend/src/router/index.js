@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { PERMISSIONS } from '../constants/roles'
 import { useAuth } from '../services/auth'
 
 const auth = useAuth()
@@ -14,55 +15,55 @@ const routes = [
     path: '/',
     name: 'dashboard',
     component: () => import('../views/Dashboard.vue'),
-    meta: { roles: ['super_admin'] },
+    meta: { permissions: [PERMISSIONS.DASHBOARD_READ] },
   },
   {
     path: '/employees',
     name: 'employees',
     component: () => import('../views/Employees.vue'),
-    meta: { roles: ['super_admin'] },
+    meta: { permissions: [PERMISSIONS.EMPLOYEES_READ] },
   },
   {
     path: '/cameras',
     name: 'cameras',
     component: () => import('../views/Cameras.vue'),
-    meta: { roles: ['super_admin', 'checkpoint_operator'] },
+    meta: { permissions: [PERMISSIONS.CAMERAS_READ] },
   },
   {
     path: '/route',
     name: 'route',
     component: () => import('../views/Route.vue'),
-    meta: { roles: ['super_admin', 'checkpoint_operator'] },
+    meta: { permissions: [PERMISSIONS.CHECKPOINT_READ] },
   },
   {
     path: '/tracking',
     name: 'tracking',
     component: () => import('../views/Tracking.vue'),
-    meta: { roles: ['super_admin', 'checkpoint_operator'] },
+    meta: { permissions: [PERMISSIONS.FLOOR_MAP_VIEW] },
   },
   {
     path: '/video-analysis',
     name: 'video-analysis',
     component: () => import('../views/VideoAnalysis.vue'),
-    meta: { roles: ['super_admin', 'checkpoint_operator'] },
+    meta: { permissions: [PERMISSIONS.VIDEO_ANALYSIS_READ] },
   },
   {
     path: '/departments',
     name: 'departments',
     component: () => import('../views/Departments.vue'),
-    meta: { roles: ['super_admin'] },
+    meta: { permissions: [PERMISSIONS.DEPARTMENTS_READ] },
   },
   {
     path: '/guests',
     name: 'guests',
     component: () => import('../views/Guests.vue'),
-    meta: { roles: ['super_admin', 'checkpoint_operator'] },
+    meta: { permissions: [PERMISSIONS.GUESTS_READ] },
   },
   {
     path: '/users',
     name: 'users',
     component: () => import('../views/Users.vue'),
-    meta: { roles: ['super_admin'] },
+    meta: { permissions: [PERMISSIONS.USERS_MANAGE] },
   },
   {
     path: '/:pathMatch(.*)*',
@@ -104,8 +105,8 @@ router.beforeEach(async (to) => {
     }
   }
 
-  const allowedRoles = to.meta.roles || []
-  if (allowedRoles.length > 0 && !auth.hasAnyRole(...allowedRoles)) {
+  const requiredPermissions = to.meta.permissions || []
+  if (requiredPermissions.length > 0 && !requiredPermissions.every((permission) => auth.hasPermission(permission))) {
     return auth.getDefaultRoute()
   }
 

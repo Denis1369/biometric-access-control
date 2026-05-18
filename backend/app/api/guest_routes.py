@@ -5,21 +5,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlmodel import SQLModel, Session
 
 from app.core.database import get_session
-from app.core.deps import require_roles
+from app.core.deps import require_permissions
+from app.core.permissions import GUEST_ROUTES_READ
 from app.models.floors import Floor
-from app.models.user import UserRole
 from app.services.guest_route_service import (
     build_guest_probable_route,
     get_floor_camera_route_candidates,
 )
 
 router = APIRouter(prefix="/api", tags=["Вероятные маршруты гостей"])
-
-READ_ROLES = (
-    UserRole.SUPER_ADMIN,
-    UserRole.CHECKPOINT_OPERATOR,
-)
-
 
 class GuestProbableRouteRead(SQLModel):
     guest_id: int
@@ -42,7 +36,7 @@ class CameraRouteCandidatesRead(SQLModel):
     "/floors/{floor_id}/camera-route-candidates",
     response_model=CameraRouteCandidatesRead,
     summary="Получить участки графа, попадающие в зоны камер",
-    dependencies=[Depends(require_roles(*READ_ROLES))],
+    dependencies=[Depends(require_permissions(GUEST_ROUTES_READ))],
 )
 def get_camera_route_candidates_for_floor(
     floor_id: int,
@@ -62,7 +56,7 @@ def get_camera_route_candidates_for_floor(
     "/floors/{floor_id}/guests/{guest_id}/probable-route",
     response_model=GuestProbableRouteRead,
     summary="Построить вероятный маршрут гостя по событиям камер",
-    dependencies=[Depends(require_roles(*READ_ROLES))],
+    dependencies=[Depends(require_permissions(GUEST_ROUTES_READ))],
 )
 def get_guest_probable_route(
     floor_id: int,

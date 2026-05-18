@@ -6,7 +6,7 @@
         <p class="page-subtitle">Мультикамерное наблюдение и управление доступом в реальном времени.</p>
       </div>
       <div class="header-controls">
-        <button class="btn-primary" @click="openGuestDialog" :disabled="selectedCameraIds.length === 0">
+        <button v-if="canIssueGuestPass" class="btn-primary" @click="openGuestDialog" :disabled="selectedCameraIds.length === 0">
           <i class="pi pi-id-card"></i> Выдать гостевой пропуск
         </button>
       </div>
@@ -201,13 +201,20 @@ import { buildWsUrl } from '../api/client'
 import { analyticsApi } from '../api/analytics'
 import { guestsApi } from '../api/guests'
 import { employeesApi } from '../api/employees'
+import { PERMISSIONS } from '../constants/roles'
 import { createJsonWebSocket } from '../services/jsonWebSocket'
 import { createCanvasStreamPlayer } from '../services/liveStream'
+import { useAuth } from '../services/auth'
 import { useUi } from '../services/ui'
 
 defineOptions({ name: 'RoutePage' })
 
 const ui = useUi()
+const auth = useAuth()
+const canIssueGuestPass = computed(() => (
+  auth.hasPermission(PERMISSIONS.GUESTS_WRITE) &&
+  auth.hasPermission(PERMISSIONS.GUEST_PASSES_ISSUE)
+))
 const availableCameras = ref([])
 const employees = ref([])
 const selectedCameraIds = ref([]) // Массив выбранных ID
@@ -488,6 +495,7 @@ const cleanupAllStreams = () => {
 // --- ГОСТЕВОЙ ПРОПУСК ---
 
 const openGuestDialog = () => {
+  if (!canIssueGuestPass.value) return
   photoPreview.value = null
   snapshotCameraId.value = selectedCameraIds.value.length > 0 ? selectedCameraIds.value[0] : ''
   
@@ -525,6 +533,7 @@ const selectEmployee = (employee) => {
 }
 
 const takeSnapshot = async () => {
+  if (!canIssueGuestPass.value) return
   if (!snapshotCameraId.value) return
   isTakingSnapshot.value = true
   try {
@@ -543,6 +552,7 @@ const takeSnapshot = async () => {
 }
 
 const saveGuest = async () => {
+  if (!canIssueGuestPass.value) return
   if (!guestForm.value.last_name || !guestForm.value.first_name || !guestForm.value.valid_until || !guestForm.value.employee_id) {
     ui.warn('Заполните обязательные поля: фамилия, имя, срок действия и сотрудник')
     return
@@ -572,7 +582,9 @@ const saveGuest = async () => {
 
 onMounted(() => {
   loadCameras()
-  loadEmployees()
+  if (canIssueGuestPass.value) {
+    loadEmployees()
+  }
   connectAccessLogSocket()
 })
 

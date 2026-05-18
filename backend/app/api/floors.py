@@ -6,21 +6,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, SQLModel, select
 
 from app.core.database import get_session
-from app.core.deps import require_roles
+from app.core.deps import require_permissions
+from app.core.permissions import FLOOR_PLANS_READ, FLOOR_PLANS_WRITE, FLOORS_READ, FLOORS_WRITE
 from app.models.buildings import Building
 from app.models.floors import Floor
-from app.models.user import UserRole
 
 router = APIRouter(prefix="/api/floors", tags=["Этажи"])
-
-READ_ROLES = (
-    UserRole.SUPER_ADMIN,
-    UserRole.CHECKPOINT_OPERATOR,
-)
-WRITE_ROLES = (
-    UserRole.SUPER_ADMIN,
-)
-
 
 class FloorRead(SQLModel):
     id: int
@@ -51,7 +42,7 @@ def _normalize_required_name(value: str, field_name: str) -> str:
     response_model=List[FloorRead],
     summary="Получить этажи",
     description="Возвращает этажи. Можно отфильтровать по building_id.",
-    dependencies=[Depends(require_roles(*READ_ROLES))],
+    dependencies=[Depends(require_permissions(FLOORS_READ))],
 )
 def get_floors(
     building_id: int | None = None,
@@ -82,7 +73,7 @@ def get_floors(
     response_model=FloorWithBuildingRead,
     summary="Получить этаж по ID",
     description="Возвращает карточку этажа.",
-    dependencies=[Depends(require_roles(*READ_ROLES))],
+    dependencies=[Depends(require_permissions(FLOORS_READ))],
 )
 def get_floor(floor_id: int, session: Session = Depends(get_session)):
     statement = (
@@ -114,7 +105,7 @@ def get_floor(floor_id: int, session: Session = Depends(get_session)):
     "/{floor_id}/plan",
     summary="Получить план этажа",
     description="Возвращает изображение плана этажа.",
-    dependencies=[Depends(require_roles(*READ_ROLES))],
+    dependencies=[Depends(require_permissions(FLOOR_PLANS_READ))],
 )
 def get_floor_plan(floor_id: int, session: Session = Depends(get_session)):
     floor = session.get(Floor, floor_id)
@@ -138,7 +129,7 @@ def get_floor_plan(floor_id: int, session: Session = Depends(get_session)):
     status_code=status.HTTP_201_CREATED,
     summary="Создать этаж",
     description="Создает этаж и при необходимости загружает план.",
-    dependencies=[Depends(require_roles(*WRITE_ROLES))],
+    dependencies=[Depends(require_permissions(FLOORS_WRITE, FLOOR_PLANS_WRITE))],
 )
 async def create_floor(
     building_id: int = Form(...),
@@ -195,7 +186,7 @@ async def create_floor(
     response_model=FloorRead,
     summary="Обновить этаж",
     description="Обновляет название, номер и план этажа.",
-    dependencies=[Depends(require_roles(*WRITE_ROLES))],
+    dependencies=[Depends(require_permissions(FLOORS_WRITE, FLOOR_PLANS_WRITE))],
 )
 async def update_floor(
     floor_id: int,

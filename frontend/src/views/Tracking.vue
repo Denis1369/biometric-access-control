@@ -337,6 +337,7 @@ import { cameraVisibilityApi } from '../api/cameraVisibility'
 import { camerasApi } from '../api/cameras'
 import { floorsApi } from '../api/floors'
 import { routeGraphApi } from '../api/routeGraph'
+import { PERMISSIONS } from '../constants/roles'
 import { formatPolygonPoints } from '../services/geometry'
 import { createCanvasStreamPlayer } from '../services/liveStream'
 import { useAuth } from '../services/auth'
@@ -346,7 +347,11 @@ defineOptions({ name: 'TrackingPage' })
 
 const auth = useAuth()
 const ui = useUi()
-const canEditPlan = computed(() => auth.hasAnyRole('super_admin'))
+const canEditPlan = computed(() => auth.hasAnyPermission(
+  PERMISSIONS.ROUTE_GRAPH_WRITE,
+  PERMISSIONS.CAMERA_PLACEMENT_WRITE,
+  PERMISSIONS.CAMERA_ZONES_WRITE,
+))
 
 const buildings = ref([])
 const floors = ref([])

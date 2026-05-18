@@ -68,6 +68,14 @@ function hasAnyRole(...roles) {
   return Boolean(state.user && roles.includes(state.user.role))
 }
 
+function hasPermission(permission) {
+  return Boolean(state.user?.permissions?.includes(permission))
+}
+
+function hasAnyPermission(...permissions) {
+  return permissions.some((permission) => hasPermission(permission))
+}
+
 function getDefaultRoute(role = state.user?.role) {
   return ROLE_HOME_ROUTES[role] || '/login'
 }
@@ -82,10 +90,13 @@ const api = {
   login,
   logout,
   hasAnyRole,
+  hasPermission,
+  hasAnyPermission,
   getDefaultRoute,
   isAuthenticated,
   username: computed(() => state.user?.username || ''),
   role: computed(() => state.user?.role || ''),
+  permissions: computed(() => state.user?.permissions || []),
 }
 
 export function useAuth() {

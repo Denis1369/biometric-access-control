@@ -29,6 +29,7 @@ from app.api import (
 from app.core.config import settings
 from app.core.database import engine
 from app.core.seed import ensure_demo_data
+from app.models.user import UserRole
 from app.services.guest_route_analysis_service import fail_interrupted_route_analysis_jobs
 from app.services.stream_manager import stream_manager
 from app.services.websocket_manager import topic_ws_manager
@@ -47,6 +48,7 @@ def create_db_and_tables():
 def ensure_runtime_schema_updates():
     inspector = inspect(engine)
     guest_columns = {column["name"] for column in inspector.get_columns("guests")}
+    user_columns = {column["name"]: column for column in inspector.get_columns("users")}
 
     statements: list[str] = []
     if "body_embedding" not in guest_columns:
@@ -55,6 +57,17 @@ def ensure_runtime_schema_updates():
         statements.append(
             "ALTER TABLE guests ADD COLUMN body_embedding_updated_at DATETIME NULL"
         )
+    role_column = user_columns.get("role")
+    if role_column is not None and engine.dialect.name == "mysql":
+        role_type = str(role_column["type"]).lower()
+        role_values = [role.value for role in UserRole]
+        if not all(value in role_type for value in role_values):
+            enum_values = ", ".join(f"'{value}'" for value in role_values)
+            statements.append(
+                "ALTER TABLE users "
+                f"MODIFY COLUMN role ENUM({enum_values}) "
+                f"NOT NULL DEFAULT '{UserRole.CHECKPOINT_OPERATOR.value}'"
+            )
 
     if not statements:
         return

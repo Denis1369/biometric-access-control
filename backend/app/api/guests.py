@@ -6,25 +6,20 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, Upl
 from sqlmodel import Session, SQLModel, select
 
 from app.core.database import get_session
-from app.core.deps import require_roles
+from app.core.deps import require_permissions
+from app.core.permissions import (
+    GUESTS_READ,
+    GUESTS_WRITE,
+    GUEST_PASSES_CLOSE,
+    GUEST_PASSES_ISSUE,
+)
 from app.models.employees import Employee
 from app.models.guests import Guest, GuestFaceSample
-from app.models.user import UserRole
 from app.services.photo_conversion import extract_face_encoding
 from app.services.reid_service import extract_primary_body_embedding_from_image_bytes
 
 router = APIRouter(prefix="/api/guests", tags=["Гости"])
 logger = logging.getLogger(__name__)
-
-READ_ROLES = (
-    UserRole.SUPER_ADMIN,
-    UserRole.CHECKPOINT_OPERATOR,
-)
-WRITE_ROLES = (
-    UserRole.SUPER_ADMIN,
-    UserRole.CHECKPOINT_OPERATOR,
-)
-
 
 def _normalize_required_name(value: str, field_name: str) -> str:
     normalized = value.strip()
@@ -85,7 +80,7 @@ def build_guest_read(session: Session, guest: Guest) -> GuestRead:
 @router.get(
     "/",
     response_model=List[GuestRead],
-    dependencies=[Depends(require_roles(*READ_ROLES))],
+    dependencies=[Depends(require_permissions(GUESTS_READ))],
 )
 def get_guests(session: Session = Depends(get_session)):
     guests = session.exec(select(Guest).order_by(Guest.id.desc())).all()
@@ -96,7 +91,7 @@ def get_guests(session: Session = Depends(get_session)):
     "/",
     response_model=GuestRead,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_roles(*WRITE_ROLES))],
+    dependencies=[Depends(require_permissions(GUESTS_WRITE, GUEST_PASSES_ISSUE))],
 )
 async def create_guest(
     last_name: str = Form(...),
@@ -210,7 +205,7 @@ async def create_guest(
 @router.post(
     "/{guest_id}/body-photo",
     response_model=GuestRead,
-    dependencies=[Depends(require_roles(*WRITE_ROLES))],
+    dependencies=[Depends(require_permissions(GUESTS_WRITE))],
 )
 async def upload_guest_body_photo(
     guest_id: int,
@@ -249,7 +244,7 @@ async def upload_guest_body_photo(
 
 @router.patch(
     "/{guest_id}/deactivate",
-    dependencies=[Depends(require_roles(*WRITE_ROLES))],
+    dependencies=[Depends(require_permissions(GUEST_PASSES_CLOSE))],
 )
 def deactivate_guest(guest_id: int, session: Session = Depends(get_session)):
     guest = session.get(Guest, guest_id)
@@ -268,7 +263,7 @@ def deactivate_guest(guest_id: int, session: Session = Depends(get_session)):
 
 @router.get(
     "/photo/{photo_id}",
-    dependencies=[Depends(require_roles(*READ_ROLES))],
+    dependencies=[Depends(require_permissions(GUESTS_READ))],
 )
 def get_guest_photo(photo_id: int, session: Session = Depends(get_session)):
     sample = session.get(GuestFaceSample, photo_id)

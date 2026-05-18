@@ -5,10 +5,10 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import SQLModel, Session
 
 from app.core.database import get_session
-from app.core.deps import require_roles
+from app.core.deps import require_permissions
+from app.core.permissions import GUEST_ROUTES_ANALYZE_VIDEO
 from app.models.floors import Floor
 from app.models.guest_route_analysis_jobs import GuestRouteAnalysisJob
-from app.models.user import UserRole
 from app.services.guest_route_analysis_service import (
     build_job_payload,
     create_guest_route_analysis_job,
@@ -16,12 +16,6 @@ from app.services.guest_route_analysis_service import (
 )
 
 router = APIRouter(prefix="/api", tags=["Офлайн-маршруты гостей"])
-
-ALLOWED_ROLES = (
-    UserRole.SUPER_ADMIN,
-    UserRole.CHECKPOINT_OPERATOR,
-)
-
 
 class GuestRouteAnalysisJobRead(SQLModel):
     id: int
@@ -46,7 +40,7 @@ class GuestRouteAnalysisJobRead(SQLModel):
     response_model=GuestRouteAnalysisJobRead,
     status_code=status.HTTP_201_CREATED,
     summary="Запустить офлайн-анализ маршрута гостя по video-file камерам этажа",
-    dependencies=[Depends(require_roles(*ALLOWED_ROLES))],
+    dependencies=[Depends(require_permissions(GUEST_ROUTES_ANALYZE_VIDEO))],
 )
 def create_route_analysis_job(
     floor_id: int,
@@ -70,7 +64,7 @@ def create_route_analysis_job(
     "/guest-route-analysis-jobs/{job_id}",
     response_model=GuestRouteAnalysisJobRead,
     summary="Получить статус офлайн-анализа маршрута гостя",
-    dependencies=[Depends(require_roles(*ALLOWED_ROLES))],
+    dependencies=[Depends(require_permissions(GUEST_ROUTES_ANALYZE_VIDEO))],
 )
 def get_route_analysis_job(
     job_id: int,

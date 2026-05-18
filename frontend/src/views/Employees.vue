@@ -5,7 +5,7 @@
         <h1 class="page-title">Сотрудники</h1>
         <p class="page-subtitle">Управление персоналом, доступом и биометрией.</p>
       </div>
-      <button class="btn-primary" @click="openNewDialog">
+      <button v-if="canManageEmployees" class="btn-primary" @click="openNewDialog">
         <i class="pi pi-plus"></i> Добавить
       </button>
     </div>
@@ -34,7 +34,7 @@
           <div class="status-badge" :class="emp.is_active ? 'active' : 'blocked'">
             {{ emp.is_active ? 'АКТИВЕН' : 'ЗАБЛОКИРОВАН' }}
           </div>
-          <div class="card-actions">
+          <div v-if="canManageEmployees" class="card-actions">
             <button class="btn-icon" @click="openEditDialog(emp)" title="Редактировать">
               <i class="pi pi-pencil"></i>
             </button>
@@ -147,11 +147,15 @@ import { ref, onMounted, computed, watch } from 'vue'
 import { employeesApi } from '../api/employees'
 import { departmentsApi } from '../api/departments'
 import { jobPositionsApi } from '../api/jobPositions'
+import { PERMISSIONS } from '../constants/roles'
+import { useAuth } from '../services/auth'
 import { useUi } from '../services/ui'
 
 defineOptions({ name: 'EmployeesPage' })
 
 const ui = useUi()
+const auth = useAuth()
+const canManageEmployees = computed(() => auth.hasPermission(PERMISSIONS.EMPLOYEES_WRITE))
 const employees = ref([])
 const departments = ref([])
 const allPositions = ref([])
@@ -222,12 +226,14 @@ const onFileSelected = e => { Array.from(e.target.files).forEach(f => newPhotos.
 const removeNewPhoto = i => { URL.revokeObjectURL(newPhotos.value[i].url); newPhotos.value.splice(i, 1); if (primaryPhoto.value.type === 'new' && primaryPhoto.value.idOrIndex === i) autoSetPrimary(); else if (primaryPhoto.value.type === 'new' && primaryPhoto.value.idOrIndex > i) primaryPhoto.value.idOrIndex -= 1 }
 
 const openNewDialog = () => {
+  if (!canManageEmployees.value) return
   isEditMode.value = false; empForm.value = { id: null, last_name: '', first_name: '', middle_name: '', position: '', department_id: '', is_active: true }
   existingPhotos.value = []; newPhotos.value.forEach(p => URL.revokeObjectURL(p.url)); newPhotos.value = []; removedPhotoIds.value = []; primaryPhoto.value = { type: null, idOrIndex: null }
   displayDialog.value = true
 }
 
 const openEditDialog = async emp => {
+  if (!canManageEmployees.value) return
   isEditMode.value = true; empForm.value = { ...emp, position: emp.position || '', department_id: String(emp.department_id) }
   newPhotos.value.forEach(p => URL.revokeObjectURL(p.url)); newPhotos.value = []; removedPhotoIds.value = []
   try {
@@ -243,6 +249,7 @@ const openEditDialog = async emp => {
 const closeDialog = () => { displayDialog.value = false; newPhotos.value.forEach(p => URL.revokeObjectURL(p.url)); newPhotos.value = [] }
 
 const saveEmployee = async () => {
+  if (!canManageEmployees.value) return
   if (!empForm.value.last_name || !empForm.value.first_name || !empForm.value.department_id) return ui.warn('Заполните обязательные поля')
   if (existingPhotos.value.length === 0 && newPhotos.value.length === 0) return ui.warn('Нужно добавить хотя бы одно фото')
   try {

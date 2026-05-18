@@ -7,25 +7,22 @@ from pydantic import BaseModel
 from sqlmodel import Session, func, select
 
 from app.core.database import get_session
-from app.core.deps import require_roles
+from app.core.deps import require_any_permission, require_permissions
+from app.core.permissions import (
+    ACCESS_LOGS_READ,
+    ACCESS_LOGS_READ_RECENT,
+    ANALYTICS_READ,
+    DASHBOARD_READ,
+    TRACKING_LOGS_READ,
+)
 from app.models.cameras import Camera
 from app.models.departments import Department
 from app.models.employees import Employee
 from app.models.guests import Guest
 from app.models.logs import AccessLog, TrackingLog
-from app.models.user import UserRole
 from app.services.access_log_service import build_person_name, get_recent_access_logs
 
 router = APIRouter(prefix="/api/analytics", tags=["Аналитика и Журналы"])
-
-
-BASIC_ANALYTICS_ROLES = (
-    UserRole.SUPER_ADMIN,
-    UserRole.CHECKPOINT_OPERATOR,
-)
-FULL_ANALYTICS_ROLES = (
-    UserRole.SUPER_ADMIN,
-)
 
 
 class AccessLogResponse(BaseModel):
@@ -66,7 +63,7 @@ def _parse_target_date(target_date: str | None) -> date:
 @router.get(
     "/access-logs",
     response_model=List[AccessLogResponse],
-    dependencies=[Depends(require_roles(*BASIC_ANALYTICS_ROLES))],
+    dependencies=[Depends(require_any_permission(ACCESS_LOGS_READ, ACCESS_LOGS_READ_RECENT))],
 )
 def get_access_logs(session: Session = Depends(get_session), skip: int = 0, limit: int = 100):
     return get_recent_access_logs(session, skip=skip, limit=limit)
@@ -75,7 +72,7 @@ def get_access_logs(session: Session = Depends(get_session), skip: int = 0, limi
 @router.get(
     "/tracking-logs",
     response_model=List[TrackingLogResponse],
-    dependencies=[Depends(require_roles(*BASIC_ANALYTICS_ROLES))],
+    dependencies=[Depends(require_permissions(TRACKING_LOGS_READ))],
 )
 def get_tracking_logs(session: Session = Depends(get_session), skip: int = 0, limit: int = 100):
     statement = (
@@ -106,7 +103,7 @@ def get_tracking_logs(session: Session = Depends(get_session), skip: int = 0, li
 @router.get(
     "/stats",
     response_model=DashboardStatsResponse,
-    dependencies=[Depends(require_roles(*BASIC_ANALYTICS_ROLES))],
+    dependencies=[Depends(require_permissions(DASHBOARD_READ))],
 )
 def get_dashboard_stats(target_date: str | None = None, session: Session = Depends(get_session)):
     total_employees = session.exec(select(func.count(Employee.id))).one()
@@ -128,7 +125,7 @@ def get_dashboard_stats(target_date: str | None = None, session: Session = Depen
 
 @router.get(
     "/daily-chart",
-    dependencies=[Depends(require_roles(*BASIC_ANALYTICS_ROLES))],
+    dependencies=[Depends(require_permissions(ANALYTICS_READ))],
 )
 def get_daily_chart(target_date: str | None = None, session: Session = Depends(get_session)):
     query_date = _parse_target_date(target_date)
@@ -154,7 +151,7 @@ def get_daily_chart(target_date: str | None = None, session: Session = Depends(g
 
 @router.get(
     "/monthly-department-chart",
-    dependencies=[Depends(require_roles(*FULL_ANALYTICS_ROLES))],
+    dependencies=[Depends(require_permissions(ANALYTICS_READ))],
 )
 def get_monthly_department_chart(session: Session = Depends(get_session)):
     today = date.today()
@@ -172,7 +169,7 @@ def get_monthly_department_chart(session: Session = Depends(get_session)):
 
 @router.get(
     "/monthly-days-chart",
-    dependencies=[Depends(require_roles(*FULL_ANALYTICS_ROLES))],
+    dependencies=[Depends(require_permissions(ANALYTICS_READ))],
 )
 def get_monthly_days_chart(session: Session = Depends(get_session)):
     today = date.today()
@@ -196,7 +193,7 @@ def get_monthly_days_chart(session: Session = Depends(get_session)):
 
 @router.get(
     "/presence",
-    dependencies=[Depends(require_roles(*FULL_ANALYTICS_ROLES))],
+    dependencies=[Depends(require_permissions(ANALYTICS_READ))],
 )
 def get_presence(target_date: str | None = None, session: Session = Depends(get_session)):
     query_date = _parse_target_date(target_date)
@@ -229,7 +226,7 @@ def get_presence(target_date: str | None = None, session: Session = Depends(get_
 
 @router.get(
     "/camera-traffic",
-    dependencies=[Depends(require_roles(*BASIC_ANALYTICS_ROLES))],
+    dependencies=[Depends(require_permissions(ANALYTICS_READ))],
 )
 def get_camera_traffic(session: Session = Depends(get_session)):
     today = date.today()
@@ -246,7 +243,7 @@ def get_camera_traffic(session: Session = Depends(get_session)):
 
 @router.get(
     "/daily-attendance",
-    dependencies=[Depends(require_roles(*FULL_ANALYTICS_ROLES))],
+    dependencies=[Depends(require_permissions(ANALYTICS_READ))],
 )
 def get_daily_attendance(target_date: date, session: Session = Depends(get_session)):
     employees = session.exec(
@@ -314,7 +311,7 @@ def get_daily_attendance(target_date: date, session: Session = Depends(get_sessi
 
 @router.get(
     "/daily-guests",
-    dependencies=[Depends(require_roles(*FULL_ANALYTICS_ROLES))],
+    dependencies=[Depends(require_permissions(ANALYTICS_READ))],
 )
 def get_daily_guests(target_date: date, session: Session = Depends(get_session)):
     start_of_day = datetime.combine(target_date, datetime.min.time())
@@ -398,7 +395,7 @@ def get_daily_guests(target_date: date, session: Session = Depends(get_session))
 
 @router.get(
     "/discipline",
-    dependencies=[Depends(require_roles(*FULL_ANALYTICS_ROLES))],
+    dependencies=[Depends(require_permissions(ANALYTICS_READ))],
 )
 def get_discipline_stats(session: Session = Depends(get_session)):
     today = date.today()

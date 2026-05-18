@@ -200,6 +200,7 @@
       <div class="modal-actions">
         <button class="btn-text" @click="close">Отмена</button>
         <button
+          v-if="canBuildFromJournal"
           class="btn-text route-journal-btn"
           :disabled="!floorId || jobLoading || resultLoading"
           @click="$emit('build-from-journal')"
@@ -207,6 +208,7 @@
           Построить по журналу
         </button>
         <button
+          v-if="canStartAnalysis"
           class="btn-primary"
           :disabled="!floorId || jobLoading || resultLoading"
           @click="$emit('start-analysis')"
@@ -271,6 +273,14 @@ const props = defineProps({
   clockTo: {
     type: String,
     default: '',
+  },
+  canBuildFromJournal: {
+    type: Boolean,
+    default: false,
+  },
+  canStartAnalysis: {
+    type: Boolean,
+    default: false,
   },
 })
 

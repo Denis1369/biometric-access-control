@@ -5,27 +5,19 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Field, SQLModel, Session, select
 
 from app.core.database import get_session
-from app.core.deps import require_roles
+from app.core.deps import require_permissions
+from app.core.permissions import (
+    CAMERAS_WRITE,
+    CAMERA_PLACEMENT_READ,
+    CAMERA_SNAPSHOT_READ,
+)
 from app.models.buildings import Building
 from app.models.camera_visibility_zones import CameraVisibilityZone
 from app.models.cameras import Camera
 from app.models.floors import Floor
-from app.models.user import UserRole
 from app.services.stream_manager import stream_manager
 
 router = APIRouter(prefix="/api/cameras", tags=["Камеры"])
-
-READ_ROLES = (
-    UserRole.SUPER_ADMIN,
-    UserRole.CHECKPOINT_OPERATOR,
-)
-WRITE_ROLES = (
-    UserRole.SUPER_ADMIN,
-)
-SNAPSHOT_ROLES = (
-    UserRole.SUPER_ADMIN,
-    UserRole.CHECKPOINT_OPERATOR,
-)
 
 ALLOWED_DIRECTIONS = {"in", "out", "both", "internal"}
 
@@ -149,7 +141,7 @@ def _normalize_direction(direction: str) -> str:
     response_model=List[CameraReadWithNames],
     summary="Получить камеры",
     description="Возвращает список камер. Можно фильтровать по building_id и floor_id.",
-    dependencies=[Depends(require_roles(*READ_ROLES))],
+    dependencies=[Depends(require_permissions(CAMERA_PLACEMENT_READ))],
 )
 def get_cameras(
     building_id: int | None = None,
@@ -196,7 +188,7 @@ def get_cameras(
     response_model=CameraReadWithNames,
     summary="Получить камеру по ID",
     description="Возвращает карточку камеры.",
-    dependencies=[Depends(require_roles(*READ_ROLES))],
+    dependencies=[Depends(require_permissions(CAMERA_PLACEMENT_READ))],
 )
 def get_camera(camera_id: int, session: Session = Depends(get_session)):
     statement = (
@@ -235,7 +227,7 @@ def get_camera(camera_id: int, session: Session = Depends(get_session)):
     status_code=status.HTTP_201_CREATED,
     summary="Создать камеру",
     description="Создает новую камеру.",
-    dependencies=[Depends(require_roles(*WRITE_ROLES))],
+    dependencies=[Depends(require_permissions(CAMERAS_WRITE))],
 )
 def create_camera(payload: CameraCreate, session: Session = Depends(get_session)):
     building_id, floor_id = _validate_location(session, payload.building_id, payload.floor_id)
@@ -275,7 +267,7 @@ def create_camera(payload: CameraCreate, session: Session = Depends(get_session)
     response_model=CameraRead,
     summary="Обновить камеру",
     description="Обновляет камеру, ее этаж и позицию на плане.",
-    dependencies=[Depends(require_roles(*WRITE_ROLES))],
+    dependencies=[Depends(require_permissions(CAMERAS_WRITE))],
 )
 def update_camera(
     camera_id: int,
@@ -359,7 +351,7 @@ def update_camera(
     response_model=DemoRecognitionState,
     summary="Управление распознаванием демо-камеры",
     description="Включает или выключает распознавание для локального видеоисточника в рантайме.",
-    dependencies=[Depends(require_roles(*SNAPSHOT_ROLES))],
+    dependencies=[Depends(require_permissions(CAMERA_SNAPSHOT_READ))],
 )
 def update_demo_recognition(camera_id: int, payload: DemoRecognitionUpdate):
     state = stream_manager.set_demo_recognition_enabled(camera_id, payload.enabled)
@@ -376,7 +368,7 @@ def update_demo_recognition(camera_id: int, payload: DemoRecognitionUpdate):
     "/{camera_id}/snapshot",
     summary="Сделать моментальный снимок с камеры",
     description="Забирает последний кадр из фонового видеопотока. Идеально для регистрации гостей.",
-    dependencies=[Depends(require_roles(*SNAPSHOT_ROLES))],
+    dependencies=[Depends(require_permissions(CAMERA_SNAPSHOT_READ))],
 )
 def get_camera_snapshot(camera_id: int):
     frame_bytes = stream_manager.get_latest_frame(camera_id, max_age_sec=3.0)

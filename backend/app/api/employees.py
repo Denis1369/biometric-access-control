@@ -8,23 +8,15 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Field, SQLModel, Session, select
 
 from app.core.database import get_session
-from app.core.deps import require_roles
+from app.core.deps import require_any_permission, require_permissions
+from app.core.permissions import EMPLOYEES_LOOKUP, EMPLOYEES_READ, EMPLOYEES_WRITE
 from app.models.departments import Department
 from app.models.employee_face_samples import EmployeeFaceSample
 from app.models.employees import Employee
-from app.models.user import UserRole
 from app.services.photo_conversion import extract_face_encoding
 
 router = APIRouter(prefix="/api/employees", tags=["Сотрудники"])
 logger = logging.getLogger(__name__)
-
-READ_ROLES = (
-    UserRole.SUPER_ADMIN,
-)
-WRITE_ROLES = (
-    UserRole.SUPER_ADMIN,
-)
-
 
 class EmployeeFaceSampleRead(SQLModel):
     id: int
@@ -145,7 +137,7 @@ def build_employee_detail(session: Session, employee: Employee) -> EmployeeDetai
 @router.get(
     "/",
     response_model=List[EmployeeListItem],
-    dependencies=[Depends(require_roles(*READ_ROLES))],
+    dependencies=[Depends(require_any_permission(EMPLOYEES_READ, EMPLOYEES_LOOKUP))],
 )
 def get_employees(session: Session = Depends(get_session), skip: int = 0, limit: int = 100):
     statement = select(Employee).offset(skip).limit(limit)
@@ -156,7 +148,7 @@ def get_employees(session: Session = Depends(get_session), skip: int = 0, limit:
 @router.get(
     "/{employee_id}",
     response_model=EmployeeDetail,
-    dependencies=[Depends(require_roles(*READ_ROLES))],
+    dependencies=[Depends(require_permissions(EMPLOYEES_READ))],
 )
 def get_employee(employee_id: int, session: Session = Depends(get_session)):
     employee = session.get(Employee, employee_id)
@@ -167,7 +159,7 @@ def get_employee(employee_id: int, session: Session = Depends(get_session)):
 
 @router.get(
     "/face-samples/{sample_id}/photo",
-    dependencies=[Depends(require_roles(*READ_ROLES))],
+    dependencies=[Depends(require_permissions(EMPLOYEES_READ))],
 )
 def get_face_sample_photo(sample_id: int, session: Session = Depends(get_session)):
     sample = session.get(EmployeeFaceSample, sample_id)
@@ -180,7 +172,7 @@ def get_face_sample_photo(sample_id: int, session: Session = Depends(get_session
     "/",
     response_model=EmployeeDetail,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_roles(*WRITE_ROLES))],
+    dependencies=[Depends(require_permissions(EMPLOYEES_WRITE))],
 )
 async def create_employee(
     last_name: str = Form(...),
@@ -270,7 +262,7 @@ async def create_employee(
 @router.patch(
     "/{employee_id}",
     response_model=EmployeeDetail,
-    dependencies=[Depends(require_roles(*WRITE_ROLES))],
+    dependencies=[Depends(require_permissions(EMPLOYEES_WRITE))],
 )
 async def update_employee(
     employee_id: int,

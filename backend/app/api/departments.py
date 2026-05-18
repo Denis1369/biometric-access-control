@@ -6,20 +6,11 @@ from pydantic import BaseModel
 from sqlmodel import Field, Session, SQLModel, select
 
 from app.core.database import get_session
-from app.core.deps import require_roles
+from app.core.deps import require_permissions
+from app.core.permissions import DEPARTMENTS_READ, DEPARTMENTS_WRITE
 from app.models.departments import Department
-from app.models.user import UserRole
 
 router = APIRouter(prefix="/api/departments", tags=["Отделы"])
-
-READ_ROLES = (
-    UserRole.SUPER_ADMIN,
-    UserRole.CHECKPOINT_OPERATOR,
-    )
-WRITE_ROLES = (
-    UserRole.SUPER_ADMIN,
-    )
-
 
 class GlobalScheduleUpdate(BaseModel):
     work_start: time
@@ -57,7 +48,7 @@ def _normalize_required_name(value: str) -> str:
 @router.get(
     "/",
     response_model=List[Department],
-    dependencies=[Depends(require_roles(*READ_ROLES))],
+    dependencies=[Depends(require_permissions(DEPARTMENTS_READ))],
 )
 def get_departments(session: Session = Depends(get_session), skip: int = 0, limit: int = 100):
     statement = select(Department).offset(skip).limit(limit)
@@ -68,7 +59,7 @@ def get_departments(session: Session = Depends(get_session), skip: int = 0, limi
     "/",
     response_model=Department,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_roles(*WRITE_ROLES))],
+    dependencies=[Depends(require_permissions(DEPARTMENTS_WRITE))],
 )
 def create_department(
     department: DepartmentCreate,
@@ -96,7 +87,7 @@ def create_department(
 @router.patch(
     "/{department_id}",
     response_model=Department,
-    dependencies=[Depends(require_roles(*WRITE_ROLES))],
+    dependencies=[Depends(require_permissions(DEPARTMENTS_WRITE))],
 )
 def update_department(
     department_id: int,
@@ -137,7 +128,7 @@ def update_department(
 @router.post(
     "/apply-global-schedule",
     summary="Применить график ко всем отделам",
-    dependencies=[Depends(require_roles(*WRITE_ROLES))],
+    dependencies=[Depends(require_permissions(DEPARTMENTS_WRITE))],
 )
 def apply_global_schedule(schedule: GlobalScheduleUpdate, session: Session = Depends(get_session)):
     departments = session.exec(select(Department)).all()

@@ -5,20 +5,21 @@
         {{ passValid ? 'ПРОПУСК АКТИВЕН' : 'ИСТЕК / ЗАКРЫТ' }}
       </StatusBadge>
 
-      <div class="guest-card__actions">
+      <div v-if="canBuildRoute || canAddBodyPhoto || canDeactivate" class="guest-card__actions">
         <BaseIconButton
+          v-if="canBuildRoute"
           icon="pi pi-map-marker"
           label="Построить маршрут гостя"
           @click="$emit('build-route', guest)"
         />
         <BaseIconButton
-          v-if="canManageGuests && !guest.has_body_embedding"
+          v-if="canAddBodyPhoto && !guest.has_body_embedding"
           icon="pi pi-id-card"
           label="Добавить фото полного роста для Re-ID"
           @click="$emit('add-body-photo', guest)"
         />
         <BaseIconButton
-          v-if="canManageGuests && passValid"
+          v-if="canDeactivate && passValid"
           icon="pi pi-ban"
           label="Аннулировать пропуск"
           tone="warning"
@@ -82,7 +83,15 @@ defineProps({
     type: String,
     default: '',
   },
-  canManageGuests: {
+  canBuildRoute: {
+    type: Boolean,
+    default: false,
+  },
+  canAddBodyPhoto: {
+    type: Boolean,
+    default: false,
+  },
+  canDeactivate: {
     type: Boolean,
     default: false,
   },

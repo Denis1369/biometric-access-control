@@ -194,6 +194,7 @@
 import { ref, onMounted, onBeforeUnmount, computed, nextTick } from 'vue'
 import { camerasApi } from '../api/cameras'
 import { buildWsUrl } from '../api/client'
+import { PERMISSIONS } from '../constants/roles'
 import { useAuth } from '../services/auth'
 import { createCanvasStreamPlayer } from '../services/liveStream'
 import { useUi } from '../services/ui'
@@ -202,7 +203,7 @@ defineOptions({ name: 'CamerasPage' })
 
 const auth = useAuth()
 const ui = useUi()
-const canManageCameras = computed(() => auth.hasAnyRole('super_admin'))
+const canManageCameras = computed(() => auth.hasPermission(PERMISSIONS.CAMERAS_WRITE))
 
 const cameras = ref([])
 const displayDialog = ref(false)

@@ -4,7 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import Session, SQLModel, select
 
 from app.core.database import get_session
-from app.core.deps import get_current_user, require_roles
+from app.core.deps import get_current_user, require_permissions
+from app.core.permissions import USERS_MANAGE
 from app.core.security import get_password_hash
 from app.models.employees import Employee
 from app.models.user import User, UserRole
@@ -14,6 +15,9 @@ router = APIRouter(prefix="/api/users", tags=["Пользователи"])
 ASSIGNABLE_ROLES = {
     UserRole.SUPER_ADMIN,
     UserRole.CHECKPOINT_OPERATOR,
+    UserRole.TECHNICIAN,
+    UserRole.HR,
+    UserRole.ANALYST,
 }
 
 
@@ -79,14 +83,14 @@ def validate_assignable_role(role: UserRole) -> None:
     if role not in ASSIGNABLE_ROLES:
         raise HTTPException(
             status_code=400,
-            detail="На текущем этапе доступны только роли super_admin и checkpoint_operator",
+            detail="Эта роль недоступна для назначения",
         )
 
 
 @router.get(
     "/",
     response_model=List[UserRead],
-    dependencies=[Depends(require_roles(UserRole.SUPER_ADMIN))],
+    dependencies=[Depends(require_permissions(USERS_MANAGE))],
 )
 def get_users(session: Session = Depends(get_session)):
     users = session.exec(select(User).order_by(User.id.desc())).all()
@@ -97,7 +101,7 @@ def get_users(session: Session = Depends(get_session)):
     "/",
     response_model=UserRead,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_roles(UserRole.SUPER_ADMIN))],
+    dependencies=[Depends(require_permissions(USERS_MANAGE))],
 )
 def create_user(payload: UserCreate, session: Session = Depends(get_session)):
     username = payload.username.strip()
@@ -130,7 +134,7 @@ def create_user(payload: UserCreate, session: Session = Depends(get_session)):
 @router.patch(
     "/{user_id}",
     response_model=UserRead,
-    dependencies=[Depends(require_roles(UserRole.SUPER_ADMIN))],
+    dependencies=[Depends(require_permissions(USERS_MANAGE))],
 )
 def update_user(
     user_id: int,
