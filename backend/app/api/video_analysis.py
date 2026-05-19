@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import logging
+import mimetypes
 import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import List
 
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlmodel import Session, SQLModel, select
 
 from app.core.database import get_session
@@ -116,6 +118,26 @@ def get_job_events(job_id: int, session: Session = Depends(get_session)):
         .order_by(VideoAnalysisEvent.timestamp_sec.asc())
     ).all()
     return [_event_read(event) for event in events]
+
+
+@router.get(
+    "/jobs/{job_id}/source-video",
+    dependencies=[Depends(require_permissions(VIDEO_ANALYSIS_READ))],
+)
+def get_job_source_video(job_id: int, session: Session = Depends(get_session)):
+    job = session.get(VideoAnalysisJob, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Задача анализа не найдена")
+
+    video_path = Path(job.source_path)
+    if not job.source_path or not video_path.exists() or not video_path.is_file():
+        raise HTTPException(status_code=404, detail="Исходное видео задачи не найдено")
+
+    return FileResponse(
+        path=video_path,
+        media_type=mimetypes.guess_type(video_path.name)[0] or "application/octet-stream",
+        filename=job.original_filename,
+    )
 
 
 @router.post(

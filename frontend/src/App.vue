@@ -126,7 +126,7 @@ body {
 }
 
 .logo {
-  min-height: 75px;
+  min-height: 80px;
   padding: 1.25rem 1.5rem;
   display: flex;
   align-items: center;
@@ -169,7 +169,7 @@ body {
 }
 
 .topbar {
-  min-height: 75px;
+  min-height: 80px;
   background-color: #ffffff;
   border-bottom: 1px solid #e2e8f0;
   display: flex;

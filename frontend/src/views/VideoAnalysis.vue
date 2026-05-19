@@ -61,7 +61,6 @@
               <span>Разрешено: {{ job.granted_count }}</span>
               <span>Запрещено: {{ job.denied_count }}</span>
             </div>
-            <div class="job-meta" v-if="job.reader_backend">Источник: {{ job.reader_backend }}</div>
           </button>
         </div>
       </section>
@@ -76,9 +75,7 @@
           <div class="section-head details-head">
             <div>
               <h2>{{ selectedJob.original_filename }}</h2>
-              <p class="job-meta">
-                {{ statusLabel(selectedJob.status) }} · {{ selectedJob.reader_backend || 'ожидание источника' }}
-              </p>
+              <p class="job-meta">{{ statusLabel(selectedJob.status) }}</p>
             </div>
             <div class="details-actions">
               <button v-if="canManageVideoAnalysis" class="btn-text" :disabled="rerunning || isSelectedJobBusy" @click="rerunSelectedJob">
@@ -98,10 +95,6 @@
               <strong>{{ statusLabel(selectedJob.status) }}</strong>
             </div>
             <div class="summary-card">
-              <span>Проанализировано кадров</span>
-              <strong>{{ selectedJob.analyzed_frames }}</strong>
-            </div>
-            <div class="summary-card">
               <span>Разрешено</span>
               <strong>{{ selectedJob.granted_count }}</strong>
             </div>
@@ -109,19 +102,29 @@
               <span>Запрещено</span>
               <strong>{{ selectedJob.denied_count }}</strong>
             </div>
-            <div class="summary-card">
-              <span>Длительность видео</span>
-              <strong>{{ formatSeconds(selectedJob.duration_sec) }}</strong>
-            </div>
-            <div class="summary-card">
-              <span>Всего кадров</span>
-              <strong>{{ selectedJob.total_frames ?? '—' }}</strong>
-            </div>
           </div>
 
           <div v-if="selectedJob.error_message" class="error-box">
             <i class="pi pi-exclamation-triangle"></i>
             <span>{{ selectedJob.error_message }}</span>
+          </div>
+
+          <div class="source-video-panel">
+            <div class="source-video-head">
+              <div>
+                <h3>Исходное видео</h3>
+                <p class="job-meta">Кнопка события перематывает видео к нужному кадру.</p>
+              </div>
+              <span v-if="highlightedEventId" class="seek-chip">Кадр выбран</span>
+            </div>
+            <video
+              ref="videoPlayer"
+              :key="selectedJob.id"
+              class="source-video"
+              :src="selectedJobVideoUrl"
+              controls
+              preload="metadata"
+            ></video>
           </div>
 
           <div class="section-head events-head">
@@ -140,7 +143,12 @@
           </div>
 
           <div v-else class="events-grid">
-            <article v-for="event in events" :key="event.id" class="event-card">
+            <article
+              v-for="event in events"
+              :key="event.id"
+              class="event-card"
+              :class="{ selected: highlightedEventId === event.id }"
+            >
               <img :src="getPreviewUrl(event.id)" alt="event preview" class="event-preview" />
               <div class="event-body">
                 <div class="event-top">
@@ -153,6 +161,10 @@
                 <div class="event-meta" v-if="event.confidence !== null && event.confidence !== undefined">
                   Похожесть: {{ Math.round(event.confidence * 100) }}%
                 </div>
+                <button class="btn-seek-frame" @click="seekToEvent(event)">
+                  <i class="pi pi-step-forward"></i>
+                  Перейти к этому кадру
+                </button>
               </div>
             </article>
           </div>
@@ -181,10 +193,15 @@ const uploading = ref(false)
 const jobsLoading = ref(false)
 const eventsLoading = ref(false)
 const rerunning = ref(false)
+const videoPlayer = ref(null)
+const highlightedEventId = ref(null)
 
 const jobSockets = new Map()
 
 const isSelectedJobBusy = computed(() => ['queued', 'processing'].includes(selectedJob.value?.status))
+const selectedJobVideoUrl = computed(() => (
+  selectedJob.value ? videoAnalysisApi.getJobVideoUrl(selectedJob.value.id) : ''
+))
 
 function isRunningJob(job) {
   return ['queued', 'processing'].includes(job?.status)
@@ -297,6 +314,31 @@ function getPreviewUrl(eventId) {
   return videoAnalysisApi.getEventPreviewUrl(eventId)
 }
 
+function seekToEvent(event) {
+  const player = videoPlayer.value
+  if (!player) {
+    ui.warn('Видео ещё не готово к перемотке')
+    return
+  }
+
+  const targetTime = Math.max(0, Number(event.timestamp_sec) || 0)
+  highlightedEventId.value = event.id
+
+  const seek = () => {
+    player.currentTime = Math.min(targetTime, player.duration || targetTime)
+    player.pause()
+    player.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }
+
+  if (Number.isFinite(player.duration) && player.duration > 0) {
+    seek()
+    return
+  }
+
+  player.addEventListener('loadedmetadata', seek, { once: true })
+  player.load()
+}
+
 async function loadJobs({ keepSelection = true } = {}) {
   jobsLoading.value = true
   try {
@@ -346,6 +388,7 @@ async function selectJob(jobId) {
   const job = jobs.value.find((item) => item.id === jobId)
   if (!job) return
   selectedJob.value = job
+  highlightedEventId.value = null
   if (isRunningJob(job)) {
     subscribeJob(job.id)
   }
@@ -633,6 +676,47 @@ onBeforeUnmount(() => {
   border-radius: 12px;
 }
 
+.source-video-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  border: 1px solid #dbeafe;
+  border-radius: 16px;
+  padding: 1rem;
+  background: linear-gradient(180deg, #f8fbff 0%, #ffffff 100%);
+}
+
+.source-video-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.source-video-head h3 {
+  margin: 0 0 0.25rem;
+  color: #0f172a;
+}
+
+.seek-chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  background: #dcfce7;
+  color: #166534;
+  padding: 0.35rem 0.7rem;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.source-video {
+  width: 100%;
+  max-height: 520px;
+  border-radius: 14px;
+  background: #020617;
+  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.25);
+}
+
 .events-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 420px));
@@ -646,6 +730,13 @@ onBeforeUnmount(() => {
   overflow: hidden;
   background: #fff;
   max-width: 420px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.event-card.selected {
+  border-color: #2563eb;
+  box-shadow: 0 14px 30px rgba(37, 99, 235, 0.18);
+  transform: translateY(-2px);
 }
 
 .event-preview {
@@ -668,6 +759,26 @@ onBeforeUnmount(() => {
   font-size: 1rem;
   font-weight: 700;
   color: #0f172a;
+}
+
+.btn-seek-frame {
+  margin-top: 0.35rem;
+  border: 1px solid #bfdbfe;
+  border-radius: 10px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  padding: 0.65rem 0.8rem;
+  font-weight: 800;
+}
+
+.btn-seek-frame:hover {
+  border-color: #60a5fa;
+  background: #dbeafe;
 }
 
 .panel-placeholder {

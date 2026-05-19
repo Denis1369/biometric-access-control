@@ -13,6 +13,10 @@ export const videoAnalysisApi = {
     return apiClient.get(`/video-analysis/jobs/${jobId}/events`)
   },
 
+  getJobVideoUrl(jobId) {
+    return buildApiUrl(`/video-analysis/jobs/${jobId}/source-video`, { withToken: true })
+  },
+
   rerunJob(jobId) {
     return apiClient.post(`/video-analysis/jobs/${jobId}/rerun`)
   },
