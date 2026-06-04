@@ -100,3 +100,6 @@ coverage/
 tmp/
 .agents
 skills-lock.json
+
+/docs/test
+/docs/presentation_preview_executive_tech
