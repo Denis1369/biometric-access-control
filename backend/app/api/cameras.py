@@ -1,3 +1,12 @@
+"""API камер видеонаблюдения и их размещения на плане.
+
+Камера в проекте одновременно является источником видеопотока и объектом на
+плане здания. В поле `ip_address` может храниться RTSP/HTTP-адрес реальной
+камеры или путь к локальному `file://` видео для демонстрационного режима. Этот
+router управляет справочником камер, их активностью, положением на плане и
+получением последнего кадра для регистрации гостей.
+"""
+
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
@@ -23,6 +32,13 @@ ALLOWED_DIRECTIONS = {"in", "out", "both", "internal"}
 
 
 class CameraCreate(SQLModel):
+    """Данные для создания камеры.
+
+    `plan_x` и `plan_y` хранятся как относительные координаты от 0 до 1, потому
+    что иконка камеры должна оставаться на правильном месте при любом размере
+    изображения плана в браузере.
+    """
+
     name: str = Field(min_length=1)
     ip_address: str = Field(min_length=1)
     is_active: bool = True
@@ -34,6 +50,8 @@ class CameraCreate(SQLModel):
 
 
 class CameraUpdate(SQLModel):
+    """Частичное обновление камеры, источника видео и позиции на плане."""
+
     name: str | None = None
     ip_address: str | None = None
     is_active: bool | None = None
@@ -45,6 +63,8 @@ class CameraUpdate(SQLModel):
 
 
 class CameraRead(SQLModel):
+    """Основное представление камеры, возвращаемое большинством endpoint-ов."""
+
     id: int
     name: str
     ip_address: str
@@ -57,16 +77,22 @@ class CameraRead(SQLModel):
 
 
 class CameraReadWithNames(CameraRead):
+    """Камера вместе с человекочитаемыми названиями здания и этажа."""
+
     building_name: str | None = None
     floor_name: str | None = None
     floor_number: int | None = None
 
 
 class DemoRecognitionUpdate(SQLModel):
+    """Запрос на включение или выключение распознавания для демо-видео."""
+
     enabled: bool
 
 
 class DemoRecognitionState(SQLModel):
+    """Текущее состояние распознавания на демо-камере."""
+
     camera_id: int
     recognition_enabled: bool
     is_demo_source: bool
@@ -77,6 +103,12 @@ def _validate_location(
     building_id: int | None,
     floor_id: int | None,
 ):
+    """Проверить, что выбранные здание и этаж существуют и согласованы.
+
+    Камеру можно создать без этажа, но если этаж передан, он обязан принадлежать
+    выбранному зданию. Иначе камера визуально окажется в одном объекте, а
+    логически будет связана с другим, что сломает план здания и маршруты гостей.
+    """
     if building_id is not None:
         building = session.get(Building, building_id)
         if not building:
@@ -106,6 +138,12 @@ def _validate_location(
 
 
 def _validate_ratio(value: float | None, field_name: str):
+    """Проверить относительную координату камеры на плане.
+
+    Для `plan_x` и `plan_y` допустим только диапазон от 0 до 1. Это не пиксели, а
+    доля ширины/высоты изображения плана, поэтому значения меньше 0 или больше 1
+    означают, что камера находится за пределами плана.
+    """
     if value is None:
         return
     if value < 0 or value > 1:
@@ -116,6 +154,7 @@ def _validate_ratio(value: float | None, field_name: str):
 
 
 def _normalize_non_empty(value: str, field_name: str) -> str:
+    """Очистить обязательное строковое поле камеры и запретить пустую строку."""
     normalized = value.strip()
     if not normalized:
         raise HTTPException(
@@ -126,6 +165,13 @@ def _normalize_non_empty(value: str, field_name: str) -> str:
 
 
 def _normalize_direction(direction: str) -> str:
+    """Нормализовать направление камеры и проверить допустимые значения.
+
+    Направление используется в сценариях проходной и аналитики. Например, камера
+    может фиксировать вход, выход, оба направления или внутреннее перемещение по
+    зданию. Некорректная строка отклоняется на backend, даже если frontend уже
+    ограничивает выбор.
+    """
     normalized = direction.strip().lower()
     if normalized not in ALLOWED_DIRECTIONS:
         allowed = ", ".join(sorted(ALLOWED_DIRECTIONS))
@@ -148,6 +194,12 @@ def get_cameras(
     floor_id: int | None = None,
     session: Session = Depends(get_session),
 ):
+    """Вернуть камеры, при необходимости отфильтрованные по зданию или этажу.
+
+    Endpoint используется сразу в нескольких местах: в списке камер, в редакторе
+    плана здания, в проходной и в офлайн-анализе. Поэтому ответ дополнен названиями
+    здания и этажа, чтобы frontend не делал лишние запросы ради отображения.
+    """
     statement = (
         select(Camera, Building, Floor)
         .join(Building, Camera.building_id == Building.id, isouter=True)
@@ -191,6 +243,7 @@ def get_cameras(
     dependencies=[Depends(require_permissions(CAMERA_PLACEMENT_READ))],
 )
 def get_camera(camera_id: int, session: Session = Depends(get_session)):
+    """Вернуть одну камеру вместе с названиями здания и этажа."""
     statement = (
         select(Camera, Building, Floor)
         .join(Building, Camera.building_id == Building.id, isouter=True)
@@ -230,6 +283,13 @@ def get_camera(camera_id: int, session: Session = Depends(get_session)):
     dependencies=[Depends(require_permissions(CAMERAS_WRITE))],
 )
 def create_camera(payload: CameraCreate, session: Session = Depends(get_session)):
+    """Создать камеру и при необходимости сразу запустить её поток.
+
+    Если камера активна, после сохранения она передаётся в `stream_manager`.
+    Благодаря этому новый источник начинает обрабатываться без перезапуска
+    backend. Для локальных demo-видео используется тот же механизм, что и для
+    реальных камер.
+    """
     building_id, floor_id = _validate_location(session, payload.building_id, payload.floor_id)
     _validate_ratio(payload.plan_x, "plan_x")
     _validate_ratio(payload.plan_y, "plan_y")
@@ -274,6 +334,13 @@ def update_camera(
     payload: CameraUpdate,
     session: Session = Depends(get_session),
 ):
+    """Обновить камеру, её расположение и состояние фонового потока.
+
+    Если камеру перенесли на другой этаж, старая зона видимости удаляется: зона
+    нарисована в координатах конкретного плана и не может автоматически
+    переноситься на другое изображение. После сохранения stream manager либо
+    запускает/обновляет поток активной камеры, либо останавливает его.
+    """
     camera = session.get(Camera, camera_id)
     if not camera:
         raise HTTPException(
@@ -354,6 +421,12 @@ def update_camera(
     dependencies=[Depends(require_permissions(CAMERA_SNAPSHOT_READ))],
 )
 def update_demo_recognition(camera_id: int, payload: DemoRecognitionUpdate):
+    """Включить или выключить распознавание на локальной демо-камере.
+
+    Эта функция нужна для защиты и тестирования: можно оставить видео включённым,
+    но временно отключить тяжёлый анализ кадров, чтобы не засорять журналы или не
+    нагружать слабый компьютер.
+    """
     state = stream_manager.set_demo_recognition_enabled(camera_id, payload.enabled)
     if state is None:
         raise HTTPException(
@@ -371,6 +444,12 @@ def update_demo_recognition(camera_id: int, payload: DemoRecognitionUpdate):
     dependencies=[Depends(require_permissions(CAMERA_SNAPSHOT_READ))],
 )
 def get_camera_snapshot(camera_id: int):
+    """Вернуть последний JPEG-кадр активной камеры.
+
+    Снимок используется при оформлении гостевого пропуска: оператор может взять
+    актуальный кадр с проходной вместо загрузки файла с диска. Если свежего кадра
+    нет, backend возвращает 404, чтобы frontend показал, что камера недоступна.
+    """
     frame_bytes = stream_manager.get_latest_frame(camera_id, max_age_sec=3.0)
 
     if not frame_bytes:

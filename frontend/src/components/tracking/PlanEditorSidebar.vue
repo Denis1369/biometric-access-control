@@ -76,6 +76,14 @@
 </template>
 
 <script setup>
+/**
+ * Боковая панель редактирования технической настройки плана.
+ *
+ * Здесь техник или super admin размещает камеры на этаже и задаёт зону
+ * видимости выбранной камеры. Компонент не хранит собственную сложную логику
+ * drag/drop: он показывает состояние, а действия отправляет в Tracking.vue,
+ * где есть доступ к координатам SVG и сохранению в backend.
+ */
 defineProps({
   unassignedCameras: {
     type: Array,
@@ -116,6 +124,7 @@ defineEmits([
   'delete-zone',
 ])
 
+/** Отобразить относительную координату камеры `0..1` как процент. */
 function formatPercent(value) {
   return typeof value === 'number' ? `${(value * 100).toFixed(1)}%` : '—'
 }

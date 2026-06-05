@@ -201,6 +201,14 @@ import { useUi } from '../services/ui'
 
 defineOptions({ name: 'CamerasPage' })
 
+/**
+ * Страница справочника камер.
+ *
+ * Здесь техник или super-admin заводит источники видеонаблюдения. Источник
+ * может быть сетевым потоком или локальным demo-файлом `file://...`. Для
+ * маршрута гостя особенно важны активные file-камеры: offline job берёт именно
+ * их, прогоняет видео и записывает найденные появления гостя в TrackingLog.
+ */
 const auth = useAuth()
 const ui = useUi()
 const canManageCameras = computed(() => auth.hasPermission(PERMISSIONS.CAMERAS_WRITE))

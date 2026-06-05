@@ -153,6 +153,14 @@ import { useUi } from '../services/ui'
 
 defineOptions({ name: 'EmployeesPage' })
 
+/**
+ * Страница сотрудников.
+ *
+ * HR или администратор ведёт здесь карточки сотрудников: ФИО, отдел,
+ * должность, активность и фотографии лица. Эти фотографии превращаются backend
+ * в биометрические векторы и затем используются на проходной для распознавания
+ * сотрудника и записи событий доступа.
+ */
 const ui = useUi()
 const auth = useAuth()
 const canManageEmployees = computed(() => auth.hasPermission(PERMISSIONS.EMPLOYEES_WRITE))

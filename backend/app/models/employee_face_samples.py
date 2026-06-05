@@ -1,3 +1,11 @@
+"""Сохранённые фото лиц сотрудников и embedding-векторы InsightFace.
+
+Карточка сотрудника хранит кадровые данные, но сами фотографии лица вынесены в
+отдельную таблицу. Это позволяет держать несколько образцов для одного
+сотрудника: например, основное фото и дополнительные фотографии с другим
+освещением. При удалении сотрудника образцы удаляются каскадно.
+"""
+
 from datetime import datetime
 from typing import Optional
 
@@ -7,6 +15,14 @@ from sqlalchemy.dialects.mysql import MEDIUMBLOB
 
 
 class EmployeeFaceSample(SQLModel, table=True):
+    """Один образец лица сотрудника для биометрического распознавания.
+
+    photo_data хранит бинарные данные изображения, embedding — числовой вектор
+    лица, полученный через InsightFace, а is_primary отмечает основное фото для
+    отображения в интерфейсе. Во время распознавания сервис сравнивает лицо из
+    кадра камеры с embedding-ами сотрудников.
+    """
+
     __tablename__ = "employee_face_samples"
 
     id: Optional[int] = Field(default=None, primary_key=True)

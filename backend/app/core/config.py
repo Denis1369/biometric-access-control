@@ -1,3 +1,16 @@
+"""Настройки backend-приложения.
+
+В этом файле собраны параметры, которые нельзя жёстко зашивать в бизнес-логику:
+подключение к MySQL, CORS-адреса frontend-а, JWT-секрет, пути к ML-моделям,
+пороги распознавания и ограничения анализа маршрутов. Все значения читаются из
+переменных окружения или backend/.env, поэтому один и тот же код можно запускать
+локально, на защите диплома и на сервере с разными настройками.
+
+Если в системе странно работает распознавание или маршрут гостя, этот файл
+часто является первой точкой проверки: здесь задаются пороги Re-ID, интервал
+сэмплирования видео и фильтры правдоподобности маршрута.
+"""
+
 from __future__ import annotations
 
 import os
@@ -14,10 +27,25 @@ load_dotenv()
 
 
 def _split_csv(value: str) -> list[str]:
+    """Разобрать строку вида `a,b,c` в список непустых значений.
+
+    Используется для CORS-адресов. Значения очищаются от пробелов, чтобы в .env
+    можно было писать список удобно и без риска получить origin с лишним
+    пробелом.
+    """
+
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
 def _resolve_backend_path(value: str) -> Path:
+    """Преобразовать путь из настроек в абсолютный путь backend-а.
+
+    Некоторые пути, например MODELS_DIR или REID_TORCH_CACHE_DIR, удобно хранить
+    относительными. Эта функция делает их абсолютными относительно папки
+    backend, а уже абсолютные пути оставляет как есть. Так запуск из разных
+    рабочих директорий не ломает поиск моделей.
+    """
+
     path = Path(value).expanduser()
     if path.is_absolute():
         return path
@@ -26,6 +54,19 @@ def _resolve_backend_path(value: str) -> Path:
 
 @dataclass(frozen=True)
 class Settings:
+    """Единый объект настроек приложения.
+
+    Класс намеренно заморожен: после запуска приложения настройки не должны
+    незаметно меняться в рантайме. Поля сгруппированы по смыслу:
+    подключение к базе данных, JWT и CORS, параметры ML-пайплайна Re-ID,
+    настройки offline-анализа маршрута гостя и фильтры вероятного маршрута.
+
+    Большинство числовых параметров являются компромиссом между качеством
+    распознавания и скоростью демо. Например, route_analysis_sample_interval_sec
+    определяет, как часто брать кадры из видео, а reid_match_distance влияет на
+    строгость сопоставления силуэта человека с body_embedding гостя.
+    """
+
     database_url_override: str = os.getenv("DATABASE_URL", "").strip()
     db_user: str = os.getenv("DB_USER", "").strip()
     db_password: str = os.getenv("DB_PASSWORD", "").strip()
@@ -109,6 +150,15 @@ class Settings:
 
     @property
     def database_url(self) -> str:
+        """Собрать строку подключения к MySQL.
+
+        Если задан DATABASE_URL, он используется напрямую. Иначе строка
+        собирается из DB_USER, DB_PASSWORD, DB_HOST, DB_PORT и DB_NAME. Явная
+        проверка отсутствующих переменных нужна, чтобы приложение падало с
+        понятной ошибкой при неправильной настройке, а не с длинным traceback
+        SQLAlchemy.
+        """
+
         if self.database_url_override:
             return self.database_url_override
 
@@ -137,14 +187,25 @@ class Settings:
 
     @property
     def cors_allow_origins(self) -> list[str]:
+        """Вернуть список frontend-origin, которым разрешён доступ к API."""
+
         return _split_csv(self.cors_allow_origins_raw)
 
     @property
     def models_path(self) -> Path:
+        """Абсолютный путь к каталогу локальных ML-моделей."""
+
         return _resolve_backend_path(self.models_dir).resolve()
 
     @property
     def reid_torch_cache_path(self) -> Path:
+        """Путь к cache-директории TorchReID/torch.
+
+        Если отдельная переменная не задана, cache кладётся внутрь каталога
+        моделей проекта, чтобы веса и служебные файлы не расползались по системе
+        и были проще переносимы на другой компьютер.
+        """
+
         if self.reid_torch_cache_dir:
             return _resolve_backend_path(self.reid_torch_cache_dir).resolve()
         return (self.models_path / "torch").resolve()

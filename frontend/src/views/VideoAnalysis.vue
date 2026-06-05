@@ -182,6 +182,17 @@ import { createJsonWebSocket } from '../services/jsonWebSocket'
 import { useAuth } from '../services/auth'
 import { useUi } from '../services/ui'
 
+/**
+ * Страница анализа загруженных видеофайлов.
+ *
+ * Пользователь загружает видео, backend создаёт `VideoAnalysisJob`, а затем
+ * фоновый сервис анализирует кадры: ищет лица, сравнивает их с сотрудниками и
+ * гостями, сохраняет события и preview-кадры. Страница подписывается на
+ * WebSocket конкретного задания, чтобы показывать прогресс без polling.
+ *
+ * Этот раздел отличается от маршрута гостя: здесь анализируется один
+ * загруженный файл как самостоятельное задание, а не набор file-камер этажа.
+ */
 const ui = useUi()
 const auth = useAuth()
 const canManageVideoAnalysis = computed(() => auth.hasPermission(PERMISSIONS.VIDEO_ANALYSIS_WRITE))

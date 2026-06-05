@@ -1,3 +1,12 @@
+"""Офлайн-анализ видео для построения маршрута выбранного гостя.
+
+Этот модуль обслуживает кнопку «Проанализировать видео и построить». Он берёт
+активные камеры этажа с источниками ``file://``, просматривает синхронизированные
+видеофайлы, ищет только выбранного гостя по Re-ID полного роста и, если
+получается, подтверждает совпадение по лицу. Найденные появления записываются в
+``TrackingLog``, а прогресс задания отправляется на frontend через WebSocket.
+"""
+
 from __future__ import annotations
 
 import logging
@@ -37,6 +46,8 @@ _active_jobs_lock = threading.Lock()
 
 @dataclass(frozen=True)
 class OfflineCameraSource:
+    """Проверенный локальный видеоисточник, привязанный к активной камере этажа."""
+
     camera: Camera
     path: Path
     duration_sec: float
@@ -44,6 +55,8 @@ class OfflineCameraSource:
 
 @dataclass(frozen=True)
 class TargetBodyMatch:
+    """Результат сравнения найденного силуэта с выбранным гостем через Re-ID."""
+
     distance: float
     similarity: float
     embedding: list[float]
@@ -51,6 +64,8 @@ class TargetBodyMatch:
 
 @dataclass(frozen=True)
 class TargetAppearanceCandidate:
+    """Лучший кандидат появления гостя, найденный в видео одной камеры."""
+
     timestamp_sec: float
     confidence: float
     body_match: TargetBodyMatch | None
@@ -58,6 +73,14 @@ class TargetAppearanceCandidate:
 
 
 def _normalize_video_file_path(raw_path: str) -> Path:
+    """Привести путь к demo-видео камеры к абсолютному пути проекта.
+
+    В карточке камеры путь хранится как ``file://...``. Для удобства настройки
+    пользователь может указать относительный путь вроде ``test_video/1.mp4``.
+    Сервис анализа должен открыть реальный файл независимо от текущей рабочей
+    директории, поэтому путь нормализуется относительно корня проекта.
+    """
+
     normalized = raw_path.strip()
     if WINDOWS_ABSOLUTE_PATH_RE.match(normalized):
         normalized = normalized[1:]
@@ -69,6 +92,13 @@ def _normalize_video_file_path(raw_path: str) -> Path:
 
 
 def _resolve_camera_video_path(camera: Camera) -> Path | None:
+    """Получить путь к локальному видео, если камера настроена как file-камера.
+
+    Offline-анализ маршрута работает только с заранее записанными роликами.
+    Реальные RTSP/IP-камеры здесь пропускаются: они используются live-потоками,
+    а не демо-сценарием построения маршрута по сохранённым видео.
+    """
+
     source = (camera.ip_address or "").strip()
     if not source.lower().startswith(VIDEO_FILE_PREFIX):
         return None
@@ -78,6 +108,13 @@ def _resolve_camera_video_path(camera: Camera) -> Path | None:
 
 @lru_cache(maxsize=1)
 def _parse_camera_time_offsets() -> dict[str, float]:
+    """Разобрать ручные смещения времени для синхронизации камер.
+
+    В идеале все MP4 начинаются в один момент. На практике учебные ролики могут
+    быть слегка сдвинуты. Настройка позволяет указать смещение по id или имени
+    камеры, чтобы события из разных видео легли на общую временную шкалу.
+    """
+
     offsets: dict[str, float] = {}
     raw_value = settings.route_analysis_camera_time_offsets_raw
     if not raw_value:
@@ -106,11 +143,20 @@ def _parse_camera_time_offsets() -> dict[str, float]:
 
 
 def _camera_time_offset_sec(camera: Camera) -> float:
+    """Вернуть смещение времени конкретной камеры в секундах."""
+
     offsets = _parse_camera_time_offsets()
     return offsets.get(str(camera.id), offsets.get(camera.name, 0.0))
 
 
 def _read_video_duration(path: Path) -> float:
+    """Определить длительность видеофайла камеры.
+
+    Длительность нужна, чтобы построить общий период анализа ``time_from`` /
+    ``time_to``. Позже именно этот период используется при построении маршрута
+    по журналу, поэтому старые события TrackingLog не должны попадать в результат.
+    """
+
     cap = cv2.VideoCapture(str(path))
     try:
         if not cap.isOpened():
@@ -126,6 +172,16 @@ def _read_video_duration(path: Path) -> float:
 
 
 def get_offline_camera_sources(session: Session, floor_id: int) -> tuple[list[OfflineCameraSource], list[str]]:
+    """Собрать активные ``file://`` камеры этажа и проверить видеофайлы.
+
+    Параметры:
+        session: сессия работы с базой данных.
+        floor_id: этаж, активные камеры которого нужно анализировать.
+
+    Возвращает:
+        Проверенные локальные видеоисточники и предупреждения по отсутствующим
+        или повреждённым файлам.
+    """
     cameras = session.exec(
         select(Camera)
         .where(Camera.floor_id == floor_id, Camera.is_active.is_(True))
@@ -153,6 +209,7 @@ def get_offline_camera_sources(session: Session, floor_id: int) -> tuple[list[Of
 
 
 def count_configured_offline_cameras(session: Session, floor_id: int) -> int:
+    """Посчитать активные камеры этажа, у которых источник задан как ``file://``."""
     cameras = session.exec(
         select(Camera).where(Camera.floor_id == floor_id, Camera.is_active.is_(True))
     ).all()
@@ -164,6 +221,11 @@ def count_configured_offline_cameras(session: Session, floor_id: int) -> int:
 
 
 def create_guest_route_analysis_job(session: Session, guest_id: int, floor_id: int) -> GuestRouteAnalysisJob:
+    """Создать задание офлайн-анализа маршрута после проверки условий запуска.
+
+    Гость должен существовать и уже иметь ``body_embedding``. На выбранном этаже
+    должна быть хотя бы одна активная камера с корректным локальным видеофайлом.
+    """
     expire_stale_route_analysis_jobs(session)
 
     guest = session.get(Guest, guest_id)
@@ -192,6 +254,8 @@ def create_guest_route_analysis_job(session: Session, guest_id: int, floor_id: i
 
 
 def _update_job(job_id: int, **updates) -> None:
+    """Обновить поля задания анализа и отправить WebSocket-событие."""
+
     with Session(engine) as session:
         job = session.get(GuestRouteAnalysisJob, job_id)
         if not job:
@@ -205,6 +269,13 @@ def _update_job(job_id: int, **updates) -> None:
 
 
 def _append_job_warning(job: GuestRouteAnalysisJob, warning: str) -> None:
+    """Добавить предупреждение к заданию, не прерывая весь анализ.
+
+    Offline job должен быть устойчивым: если одна камера не открылась или не
+    дала подходящих кадров, остальные камеры всё равно анализируются. Такие
+    проблемы сохраняются как warnings и показываются оператору в модальном окне.
+    """
+
     warnings = list(job.warnings_json or [])
     warnings.append(warning)
     job.warnings_json = warnings
@@ -217,6 +288,8 @@ def _fail_job(
     error_message: str,
     finished_at: datetime | None = None,
 ) -> None:
+    """Перевести задание в состояние failed и уведомить frontend."""
+
     job.status = "failed"
     job.finished_at = finished_at or datetime.now()
     job.error_message = error_message
@@ -227,7 +300,15 @@ def _fail_job(
 
 
 def expire_stale_route_analysis_jobs(session: Session) -> int:
-    """Fail jobs that are still marked as running after the configured timeout."""
+    """Завершить зависшие задания, которые слишком долго числятся активными.
+
+    Фоновый анализ может оборваться из-за перезапуска backend-а, ошибки OpenCV
+    или остановки процесса. Если оставить такой job в статусе ``queued`` или
+    ``processing``, frontend будет бесконечно показывать загрузку. Поэтому при
+    создании нового задания и чтении статуса старые активные job проверяются по
+    таймауту и переводятся в понятную ошибку.
+    """
+
     timeout_sec = max(60.0, float(settings.route_analysis_job_timeout_sec))
     now = datetime.now()
     stale_jobs = session.exec(
@@ -258,7 +339,14 @@ def expire_stale_route_analysis_jobs(session: Session) -> int:
 
 
 def fail_interrupted_route_analysis_jobs() -> int:
-    """Fail jobs left in running states after backend restart/reload."""
+    """Пометить активные задания как прерванные после перезапуска backend-а.
+
+    Фоновые потоки не переживают reload uvicorn-а. Если процесс был перезапущен,
+    старые ``processing`` job уже фактически не выполняются. Эта функция
+    вызывается при старте приложения, чтобы пользователь видел честное состояние
+    и мог запустить анализ заново.
+    """
+
     with Session(engine) as session:
         interrupted_jobs = session.exec(
             select(GuestRouteAnalysisJob).where(
@@ -285,6 +373,13 @@ def _target_body_match(
     *,
     max_distance: float,
 ) -> TargetBodyMatch | None:
+    """Найти в кадре силуэт, похожий на выбранного гостя по Re-ID.
+
+    В отличие от live-режима, offline job сравнивает найденных людей только с
+    одним гостем, для которого строится маршрут. Это быстрее и логичнее: задача
+    не “кто вообще в кадре”, а “появился ли конкретный гость на этой камере”.
+    """
+
     detections = extract_body_detections(frame_bgr)
     best_match: TargetBodyMatch | None = None
 
@@ -309,6 +404,13 @@ def _is_better_candidate(
     candidate: TargetAppearanceCandidate,
     current_best: TargetAppearanceCandidate | None,
 ) -> bool:
+    """Выбрать более убедительный кадр появления гостя на камере.
+
+    Для каждой камеры в итоговый TrackingLog пишется не каждый найденный кадр, а
+    одно лучшее событие. Сначала приоритет отдаётся совпадению, подтверждённому
+    лицом, затем более высокой уверенности Re-ID.
+    """
+
     if current_best is None:
         return True
     if candidate.face_confirmed != current_best.face_confirmed:
@@ -317,6 +419,13 @@ def _is_better_candidate(
 
 
 def _face_confirms_guest(frame_bgr: np.ndarray, session: Session, guest: Guest) -> bool:
+    """Проверить, подтверждает ли лицо в кадре выбранного гостя.
+
+    Re-ID по телу устойчив к ракурсу, но может ошибиться на похожей одежде.
+    Если в кадре дополнительно видно лицо и оно распознано как тот же гость, это
+    считается сильным подтверждением появления на камере.
+    """
+
     face_match = find_matching_person_in_frame(frame_bgr, session)
     return bool(
         face_match.person_type == "guest"
@@ -334,6 +443,13 @@ def _write_tracking_log(
     timestamp: datetime,
     confidence: float,
 ) -> None:
+    """Записать найденное появление гостя в общий TrackingLog.
+
+    Отдельная таблица событий offline job не создаётся намеренно: маршрут гостя
+    уже умеет строиться по TrackingLog. Поэтому offline-анализ просто добавляет
+    события так, как если бы гость был найден live-камерами в эти моменты.
+    """
+
     session.add(
         TrackingLog(
             guest_id=guest_id,
@@ -354,6 +470,18 @@ def _process_camera_video(
     time_from: datetime,
     sample_interval_sec: float,
 ) -> int:
+    """Проанализировать видео одной камеры и записать лучшее появление гостя.
+
+    Видео просматривается с заданным шагом, чтобы не прогонять каждую миллисекунду
+    ролика через тяжёлые модели. В каждом sampled frame сервис ищет силуэт
+    человека через Re-ID и при необходимости дополнительно проверяет лицо. Для
+    камеры выбирается один наиболее надёжный кандидат, после чего создаётся одно
+    событие TrackingLog с timestamp на общей шкале job.
+
+    Возвращаемое число показывает, сколько событий было записано для этой
+    камеры: 0, если гость не найден, или 1, если появление найдено.
+    """
+
     cap = cv2.VideoCapture(str(source.path))
     if not cap.isOpened():
         _append_job_warning(job, f"Не удалось открыть видео камеры {source.camera.name}")
@@ -390,9 +518,11 @@ def _process_camera_video(
             if face_confirmed and body_match is not None:
                 confidence = max(confidence, 0.97)
             elif body_match and body_match.distance > settings.reid_match_distance:
-                # Offline route reconstruction is softer than live access control:
-                # we pick the best appearance on each known camera instead of
-                # requiring the strict real-time Re-ID threshold on every frame.
+                # Офлайн-реконструкция маршрута мягче, чем live-контроль доступа:
+                # здесь мы выбираем лучший кадр появления гостя на известной
+                # камере, а не требуем строгого realtime-порога Re-ID на каждом
+                # отдельном кадре. Иначе демонстрационный маршрут легко
+                # развалится из-за одного неидеального ракурса.
                 confidence = max(0.45, min(0.85, confidence))
 
             candidate = TargetAppearanceCandidate(
@@ -438,6 +568,19 @@ def _process_camera_video(
 
 
 def _run_job(job_id: int) -> None:
+    """Выполнить offline job анализа маршрута выбранного гостя.
+
+    Функция собирает активные file-камеры этажа, вычисляет общий временной
+    период анализа, проходит по каждому видео и пишет найденные появления гостя
+    в TrackingLog. После каждой камеры обновляется прогресс задания, чтобы
+    frontend мог показывать “обработано N из M камер”.
+
+    После завершения сам маршрут здесь не рисуется. Маршрут строится другим
+    сервисом по уже записанным TrackingLog, зонам видимости камер и графу
+    маршрутов. Такое разделение делает систему понятнее: один модуль ищет
+    события в видео, второй превращает события в путь на плане.
+    """
+
     _update_job(job_id, status="processing", started_at=datetime.now(), error_message=None)
 
     try:
@@ -519,6 +662,8 @@ def _run_job(job_id: int) -> None:
 
 
 def _process_job(job_id: int) -> None:
+    """Запустить job с защитой от параллельной обработки одного задания."""
+
     with _active_jobs_lock:
         if job_id in _active_jobs:
             return
@@ -532,11 +677,17 @@ def _process_job(job_id: int) -> None:
 
 
 def schedule_guest_route_analysis(job_id: int) -> None:
+    """Запустить анализ маршрута в фоновом daemon-потоке, не блокируя API."""
     thread = threading.Thread(target=_process_job, args=(job_id,), daemon=True)
     thread.start()
 
 
 def build_job_payload(session: Session, job: GuestRouteAnalysisJob) -> dict:
+    """Собрать payload для WebSocket/API по текущему состоянию задания.
+
+    Завершённые задания дополнительно содержат заново рассчитанный вероятный
+    маршрут, чтобы frontend мог сразу показать его в модальном окне гостя.
+    """
     if job.status in RUNNING_JOB_STATUSES:
         expire_stale_route_analysis_jobs(session)
         session.refresh(job)
@@ -581,6 +732,8 @@ def build_job_payload(session: Session, job: GuestRouteAnalysisJob) -> dict:
 
 
 def _publish_job_update(session: Session, job: GuestRouteAnalysisJob) -> None:
+    """Опубликовать текущее состояние задания в WebSocket-тему job."""
+
     if job.id is None:
         return
     topic_ws_manager.publish(

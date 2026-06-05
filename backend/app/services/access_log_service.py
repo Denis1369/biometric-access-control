@@ -1,3 +1,12 @@
+"""Сервис подготовки и публикации событий журнала проходов.
+
+AccessLog создаётся разными частями системы: онлайн-анализом камеры, анализом
+загруженного видео или демонстрационными данными. Интерфейсу при этом нужен
+единый формат строки журнала: id, время, статус, имя человека и камера. Этот
+сервис собирает такой payload и публикует новые события в WebSocket-topic, чтобы
+проходная обновлялась без перезагрузки страницы.
+"""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -14,6 +23,8 @@ from app.services.websocket_manager import access_logs_topic, topic_ws_manager
 
 
 class AccessLogPayload(TypedDict):
+    """Формат события AccessLog, который отдаётся frontend-у."""
+
     id: int
     timestamp: datetime
     status: str
@@ -22,6 +33,14 @@ class AccessLogPayload(TypedDict):
 
 
 def build_person_name(employee: Employee | None, guest: Guest | None) -> str:
+    """Собрать отображаемое имя человека для журнала проходов.
+
+    AccessLog может ссылаться либо на сотрудника, либо на гостя, либо не иметь
+    найденного человека вообще. Эта функция приводит все варианты к одной строке
+    для интерфейса: ФИО сотрудника, `[Гость] Фамилия Имя` или «Неизвестное
+    лицо».
+    """
+
     if employee:
         return " ".join(
             part
@@ -39,6 +58,20 @@ def build_access_log_payload(
     guest: Guest | None = None,
     camera: Camera | None = None,
 ) -> AccessLogPayload:
+    """Преобразовать AccessLog и связанные модели в payload для UI/WebSocket.
+
+    Параметры:
+        access_log: Событие прохода из БД.
+        employee: Связанный сотрудник, если событие относится к сотруднику.
+        guest: Связанный гость, если событие относится к гостю.
+        camera: Камера, зафиксировавшая событие.
+
+    Возвращает:
+        Словарь, который можно отдать в REST API или отправить по WebSocket.
+        Если камера уже удалена, frontend увидит «Удаленная камера», а событие
+        останется читаемым в истории.
+    """
+
     return {
         "id": access_log.id or 0,
         "timestamp": access_log.timestamp,
@@ -49,6 +82,14 @@ def build_access_log_payload(
 
 
 def get_recent_access_logs(session: Session, *, skip: int = 0, limit: int = 100) -> list[AccessLogPayload]:
+    """Получить последние события проходов в готовом для интерфейса формате.
+
+    limit ограничивается сверху, чтобы случайный запрос не заставил backend
+    вернуть слишком большой журнал. Запрос использует outer join, потому что
+    историческое событие должно отображаться даже если связанная камера, гость
+    или сотрудник позже были удалены.
+    """
+
     safe_limit = max(1, min(limit, 200))
     statement = (
         select(AccessLog, Employee, Guest, Camera)
@@ -66,6 +107,13 @@ def get_recent_access_logs(session: Session, *, skip: int = 0, limit: int = 100)
 
 
 def get_access_log_payload(session: Session, access_log_id: int) -> AccessLogPayload | None:
+    """Получить один AccessLog для WebSocket-публикации.
+
+    Функция вызывается сразу после создания события. Она повторно читает запись
+    из БД вместе со связанными сущностями, чтобы отправить клиентам полный
+    человекочитаемый payload, а не только id.
+    """
+
     statement = (
         select(AccessLog, Employee, Guest, Camera)
         .join(Employee, AccessLog.employee_id == Employee.id, isouter=True)
@@ -82,6 +130,14 @@ def get_access_log_payload(session: Session, access_log_id: int) -> AccessLogPay
 
 
 def publish_access_log_created(access_log_id: int | None) -> None:
+    """Опубликовать новое событие прохода в WebSocket-topic.
+
+    Сервис потоков камер может работать в отдельном потоке, поэтому здесь
+    открывается короткая новая сессия БД, собирается payload и отправляется в
+    TopicWebSocketManager. Если id отсутствует или запись не найдена, публикация
+    просто пропускается: это безопаснее, чем ронять поток анализа.
+    """
+
     if access_log_id is None:
         return
 

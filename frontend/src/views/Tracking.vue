@@ -345,6 +345,24 @@ import { useUi } from '../services/ui'
 
 defineOptions({ name: 'TrackingPage' })
 
+/**
+ * Страница «План здания» объединяет несколько технических сценариев, которые
+ * на защите выглядят как одна интерактивная схема этажа:
+ *
+ * - выбор здания и этажа;
+ * - загрузка изображения плана этажа;
+ * - размещение камер на плане;
+ * - отображение и редактирование зон видимости камер;
+ * - ручная разметка графа маршрутов из точек и линий;
+ * - проверка кратчайшего пути между двумя выбранными точками;
+ * - просмотр live/file-потока выбранной камеры.
+ *
+ * Большая часть логики ниже связана с тем, что изображение плана может быть
+ * визуально растянуто браузером. Поэтому всё, что сохраняется в backend,
+ * приводится к координатам исходного изображения плана или к относительным
+ * координатам камеры. Это позволяет открыть тот же этаж на другом экране и
+ * увидеть камеры, зоны и граф в правильных местах.
+ */
 const auth = useAuth()
 const ui = useUi()
 const canEditPlan = computed(() => auth.hasAnyPermission(
@@ -353,6 +371,9 @@ const canEditPlan = computed(() => auth.hasAnyPermission(
   PERMISSIONS.CAMERA_ZONES_WRITE,
 ))
 
+// Справочники и выбранный контекст страницы. Эти данные определяют, какой план
+// сейчас открыт, какие камеры к нему привязаны и какие камеры ещё свободны для
+// размещения на выбранном этаже.
 const buildings = ref([])
 const floors = ref([])
 const mappedCameras = ref([])
@@ -363,6 +384,10 @@ const selectedBuildingId = ref('')
 const selectedFloorId = ref('')
 const activeCameraId = ref(null)
 
+// Состояние режима редактирования плана. В этом режиме техник или
+// super-admin может перетаскивать камеры, добавлять свободные камеры на этаж и
+// сохранять изменения. Список `camerasToRemoveFromFloor` нужен, чтобы при
+// сохранении явно отвязать камеры, которые оператор убрал с плана.
 const isEditMode = ref(false)
 const mapContainer = ref(null)
 const planImage = ref(null)
@@ -372,6 +397,10 @@ const savingPlan = ref(false)
 const floorsLoading = ref(false)
 const planVersion = ref(Date.now())
 
+// Состояние ручного графа маршрутов. Точки и линии не являются помещениями или
+// объектами здания: это технический граф, по которому backend строит кратчайшие
+// пути. В режиме `markup` оператор размечает граф, а в режиме `path` проверяет,
+// что между двумя точками действительно находится маршрут.
 const graphMode = ref('markup')
 const routeNodes = ref([])
 const routeEdges = ref([])
@@ -381,12 +410,22 @@ const routeEndNodeId = ref(null)
 const selectedRouteEdgeId = ref(null)
 const draftRouteEdge = ref(null)
 const routeGraphLoading = ref(false)
+
+// Состояние зон видимости камер. Зона хранится как четыре точки в координатах
+// исходного плана. Во время редактирования новая зона не заменяет сохранённую
+// мгновенно: сначала она живёт в `zoneDraftPoints`, а затем отправляется в API
+// при нажатии «Сохранить зону» или общем «Сохранить» на плане.
 const cameraZones = ref([])
 const zoneDraftPoints = ref([])
 const zoneDraftCameraId = ref(null)
 const draggingZonePointIndex = ref(null)
 const draggingZonePolygon = ref(null)
 const zoneSaving = ref(false)
+
+// Реальные размеры изображения плана и его положение внутри контейнера.
+// SVG-слой поверх плана использует эти значения для viewBox и позиционирования,
+// чтобы точки графа, зоны камер и линии попадали в те же места, что и на
+// оригинальном изображении.
 const planImageMetrics = ref({
   naturalWidth: 1,
   naturalHeight: 1,
@@ -413,6 +452,10 @@ let livePlayer = null
 let planResizeObserver = null
 let suppressNextRouteEdgeClick = false
 
+// Производные данные для отображения выбранного здания, этажа, картинки плана,
+// SVG viewBox, линий графа и зон камер. Они не сохраняются напрямую в БД, а
+// собираются из текущего состояния страницы каждый раз, когда пользователь
+// меняет этаж, камеру, режим или масштаб окна.
 const selectedBuilding = computed(() => buildings.value.find((item) => String(item.id) === String(selectedBuildingId.value)) || null)
 const currentFloor = computed(() => floors.value.find((item) => String(item.id) === String(selectedFloorId.value)) || null)
 
@@ -482,16 +525,40 @@ const renderedCameraZones = computed(() =>
 )
 const selectedCameraHasZone = computed(() => Boolean(activeCameraZone.value))
 
+/**
+ * Ограничивает относительную координату камеры диапазоном от 0 до 1.
+ *
+ * Камера на плане хранится не в пикселях, а как доля ширины и высоты
+ * контейнера: `0` означает левый/верхний край, `1` означает правый/нижний
+ * край. Такое хранение удобно для иконок камер, но при перетаскивании мышь
+ * может выйти за пределы плана, поэтому координату нужно безопасно обрезать.
+ */
 function clamp01(value) {
   return Math.max(0, Math.min(1, value))
 }
 
+/**
+ * Возвращает CSS-позицию иконки камеры на плане.
+ *
+ * Backend хранит `plan_x` и `plan_y` как относительные координаты. Компонент
+ * переводит их в проценты, потому что сама иконка камеры позиционируется
+ * поверх изображения обычным CSS. Если координаты ещё не заданы, камера
+ * временно показывается в центре плана, чтобы техник мог её перетащить.
+ */
 function cameraStyle(camera) {
   const x = typeof camera.plan_x === 'number' ? camera.plan_x : 0.5
   const y = typeof camera.plan_y === 'number' ? camera.plan_y : 0.5
   return { left: `${x * 100}%`, top: `${y * 100}%` }
 }
 
+/**
+ * Переводит положение мыши в относительные координаты контейнера плана.
+ *
+ * Эта функция используется только для иконок камер. Для графа маршрутов и зон
+ * камер используется другая система координат: пиксели исходного изображения.
+ * Такое разделение важно, потому что камеры визуально являются UI-маркерами,
+ * а точки графа и полигоны должны совпадать с настоящими координатами плана.
+ */
 function getMouseNormalized(event) {
   if (!mapContainer.value) return { x: 0.5, y: 0.5 }
   const rect = mapContainer.value.getBoundingClientRect()
@@ -501,6 +568,15 @@ function getMouseNormalized(event) {
   }
 }
 
+/**
+ * Пересчитывает размеры SVG-слоя поверх плана после загрузки изображения или
+ * изменения размера окна.
+ *
+ * Изображение плана вписывается в контейнер с сохранением пропорций. Из-за
+ * этого вокруг картинки могут появиться поля. SVG-слой должен получить те же
+ * `left`, `top`, `width` и `height`, иначе пользователь будет кликать в одно
+ * место, а точки графа сохранятся в другое.
+ */
 function updatePlanImageMetrics() {
   if (!mapContainer.value || !planImage.value?.naturalWidth || !planImage.value?.naturalHeight) return
 
@@ -525,6 +601,15 @@ function onPlanImageLoad() {
   updatePlanImageMetrics()
 }
 
+/**
+ * Переводит координату клика по SVG в пиксели исходного изображения плана.
+ *
+ * Для маршрутов и зон камер нельзя сохранять координаты экрана, потому что при
+ * другом масштабе окна они изменятся. Поэтому координата мыши сначала
+ * нормализуется внутри SVG, а затем умножается на натуральный размер картинки.
+ * Именно эти значения отправляются в backend как `route_nodes.x/y` и
+ * `camera_visibility_zones.points_json`.
+ */
 function getRoutePointerOriginal(event) {
   if (!routeSvg.value) return null
   const rect = routeSvg.value.getBoundingClientRect()
@@ -537,6 +622,14 @@ function getRoutePointerOriginal(event) {
   }
 }
 
+/**
+ * Находит ближайшую точку на линии графа к месту клика пользователя.
+ *
+ * Эта функция нужна для аккуратного поведения “клик по линии создаёт точку
+ * прямо на линии”. Если пользователь немного промахнулся мышью, новая точка
+ * всё равно будет поставлена на сам отрезок, а не рядом с ним. Благодаря этому
+ * граф остаётся чистым и линии не разрываются визуально.
+ */
 function projectPointToSegment(point, from, to) {
   const dx = to.x - from.x
   const dy = to.y - from.y
@@ -550,6 +643,14 @@ function projectPointToSegment(point, from, to) {
   }
 }
 
+/**
+ * Возвращает координату новой точки при разбиении существующей линии графа.
+ *
+ * В `renderedRouteEdges` линия уже содержит объекты `from` и `to`, но при
+ * некоторых действиях может прийти только базовое ребро из API. Поэтому
+ * функция умеет взять концы линии из `routeNodesById`. Если концы не найдены,
+ * возвращается исходная точка, чтобы обработчик не падал.
+ */
 function getPointOnRouteEdge(edge, point) {
   const from = edge.from || routeNodesById.value.get(edge.from_node_id)
   const to = edge.to || routeNodesById.value.get(edge.to_node_id)
@@ -584,6 +685,13 @@ function distributeFallbackX(index, total) {
   return 0.15 + (0.7 / (total - 1)) * index
 }
 
+/**
+ * Делает камеру активной для боковой панели и редактирования зоны.
+ *
+ * При смене камеры черновик зоны сбрасывается. Это защищает от ситуации, когда
+ * оператор начал рисовать зону одной камеры, затем выбрал другую и случайно
+ * сохранил старые точки уже для нового устройства.
+ */
 function selectCamera(id) {
   if (activeCameraId.value === id) return
   activeCameraId.value = id
@@ -607,6 +715,13 @@ function getVideoWsUrl(cameraId) {
   return buildWsUrl(`/ws/video/${cameraId}`)
 }
 
+/**
+ * Открывает модальное окно просмотра камеры и подключает WebSocket-плеер.
+ *
+ * Страница плана не декодирует поток сама. Она создаёт `livePlayer`, передаёт
+ * ему canvas и WebSocket URL, а сервис `liveStream` уже получает бинарные кадры
+ * и рисует их на canvas. Это держит работу с видео отдельно от логики плана.
+ */
 function openVideoModal(camera) {
   closeVideoModal()
 
@@ -635,6 +750,13 @@ function openVideoModal(camera) {
   })
 }
 
+/**
+ * Закрывает просмотр камеры и освобождает WebSocket/canvas-плеер.
+ *
+ * Важно явно закрывать live-player, иначе после закрытия модалки браузер
+ * продолжит держать соединение с backend и получать кадры, которые уже нигде
+ * не отображаются.
+ */
 function closeVideoModal() {
   displayVideoDialog.value = false
   viewingCamera.value = null
@@ -653,6 +775,13 @@ function startDrag(id, event) {
   draggingCameraId.value = id
 }
 
+/**
+ * Перетаскивает камеру по плану в режиме редактирования.
+ *
+ * Во время drag операция меняет только локальные `plan_x/plan_y`. Backend
+ * обновляется позже, когда пользователь нажимает общую кнопку «Сохранить».
+ * Это позволяет свободно подвигать несколько камер и отменить изменения.
+ */
 function onMapMouseMove(event) {
   if (!isEditMode.value || !draggingCameraId.value) return
   const camera = mappedCameras.value.find((item) => item.id === draggingCameraId.value)
@@ -676,6 +805,13 @@ async function loadUnassignedCameras() {
   }
 }
 
+/**
+ * Добавляет свободную камеру на выбранный этаж в локальное состояние.
+ *
+ * Камера сразу появляется на плане в центре, но в базе она ещё не привязана к
+ * этажу. Реальное сохранение выполняется в `savePlan`, чтобы оператор мог
+ * сначала расставить несколько камер и только потом подтвердить изменения.
+ */
 function addCameraToFloor(camera) {
   mappedCameras.value.push({
     ...camera,
@@ -688,6 +824,13 @@ function addCameraToFloor(camera) {
   activeCameraId.value = camera.id
 }
 
+/**
+ * Убирает камеру с текущего плана и одновременно скрывает её зону видимости.
+ *
+ * Зона относится к конкретной камере. Если камера удалена с этажа, старая зона
+ * не должна оставаться на SVG-слое, иначе оператор увидит “призрак” зоны без
+ * камеры. Backend-отвязка камеры выполняется при общем сохранении плана.
+ */
 function removeCameraFromFloor(id) {
   const cameraIndex = mappedCameras.value.findIndex((camera) => camera.id === id)
   if (cameraIndex < 0) return
@@ -706,6 +849,13 @@ function removeCameraFromFloor(id) {
   if (activeCameraId.value === id) activeCameraId.value = null
 }
 
+/**
+ * Переводит страницу в режим редактирования камер и зон.
+ *
+ * Доступ к этому режиму есть только у ролей с техническими правами. Перед
+ * входом очищаются черновики, чтобы оператор начинал работу с текущим состоянием
+ * этажа, а не с незаконченным drag/drop из прошлого действия.
+ */
 async function toggleEditMode() {
   if (!canEditPlan.value || !selectedFloorId.value) return
 
@@ -720,6 +870,13 @@ async function toggleEditMode() {
   await loadUnassignedCameras()
 }
 
+/**
+ * Отменяет редактирование плана и перезагружает сохранённое состояние этажа.
+ *
+ * Это безопасный способ выйти из режима редактирования: все локальные
+ * перемещения камер, несохранённые зоны и список камер на удаление очищаются,
+ * а затем данные снова берутся с backend.
+ */
 function cancelEditMode() {
   if (!canEditPlan.value) return
   isEditMode.value = false
@@ -733,6 +890,15 @@ function cancelEditMode() {
   loadFloorContext()
 }
 
+/**
+ * Сохраняет размещение камер и незавершённый черновик зоны, если он готов.
+ *
+ * Пользователь может нажать не отдельную кнопку «Сохранить зону», а общую
+ * кнопку сохранения плана. Поэтому перед сохранением камер функция проверяет
+ * `zoneDraftPoints`: если там ровно четыре точки, зона тоже отправляется в
+ * backend. Если точек меньше четырёх, сохранение останавливается, потому что
+ * backend принимает только полноценный 4-угольник зоны видимости.
+ */
 async function savePlan() {
   if (!canEditPlan.value || !selectedFloorId.value) return
   const hasZoneDraft = Boolean(zoneDraftCameraId.value && zoneDraftPoints.value.length)
@@ -797,6 +963,14 @@ async function savePlan() {
   }
 }
 
+/**
+ * Переключает режим работы SVG-графа.
+ *
+ * В `markup` пользователь редактирует граф маршрутов, а в `path` выбирает две
+ * точки и проверяет кратчайший путь. Режим разметки запрещён без прав
+ * редактирования, чтобы оператор КПП или аналитик не могли случайно изменить
+ * техническую схему здания.
+ */
 function setGraphMode(mode) {
   if (!routeGraphAvailable.value || isEditMode.value) return
   if (mode === 'markup' && !canEditPlan.value) return
@@ -806,6 +980,13 @@ function setGraphMode(mode) {
   draggingZonePointIndex.value = null
 }
 
+/**
+ * Загружает ручной граф маршрутов выбранного этажа.
+ *
+ * Backend возвращает две коллекции: точки и линии. Frontend строит из них
+ * SVG-слой и локальный `Map` точек по id, чтобы быстро находить координаты
+ * концов каждой линии. Если этаж не выбран, граф очищается полностью.
+ */
 async function loadRouteGraph() {
   if (!selectedFloorId.value) {
     clearRouteGraphState()
@@ -828,6 +1009,13 @@ async function loadRouteGraph() {
   }
 }
 
+/**
+ * Загружает зоны видимости камер выбранного этажа.
+ *
+ * Дополнительно зоны фильтруются по камерам, которые сейчас действительно
+ * размещены на плане. Это защищает интерфейс от старых записей, если камера
+ * была отвязана от этажа или удалена из текущего отображения.
+ */
 async function loadCameraZones() {
   if (!selectedFloorId.value) {
     clearCameraZonesState()
@@ -846,6 +1034,13 @@ async function loadCameraZones() {
   }
 }
 
+/**
+ * Начинает редактирование зоны активной камеры.
+ *
+ * Если зона уже сохранена, её точки копируются в черновик. Копирование важно:
+ * оператор может двигать вершины, а сохранённая зона на backend изменится
+ * только после явного сохранения.
+ */
 function startZoneDraft() {
   if (!activeCamera.value) return ui.warn('Сначала выберите камеру')
   if (!isEditMode.value) return ui.warn('Включите режим редактирования камер')
@@ -854,6 +1049,13 @@ function startZoneDraft() {
   draggingZonePolygon.value = null
 }
 
+/**
+ * Добавляет очередную вершину 4-угольной зоны видимости.
+ *
+ * Зона камеры специально ограничена четырьмя точками: оператору проще быстро
+ * обозначить область наблюдения камеры, а backend может однозначно искать
+ * пересечения этой области с линиями графа маршрутов.
+ */
 function addZoneDraftPoint(event) {
   if (!isEditingCameraZone.value || !activeCamera.value) return
   if (event.button !== 0) return
@@ -864,6 +1066,13 @@ function addZoneDraftPoint(event) {
   zoneDraftPoints.value.push(point)
 }
 
+/**
+ * Начинает перетаскивание отдельной вершины зоны.
+ *
+ * Вершины можно двигать после построения зоны, чтобы аккуратно подогнать
+ * область под реальную видимость камеры на плане. Пока drag идёт, изменения
+ * остаются только в черновике.
+ */
 function startDragZonePoint(index, event) {
   if (!isEditingCameraZone.value || !activeCamera.value) return
   if (event.button !== 0) return
@@ -871,6 +1080,12 @@ function startDragZonePoint(index, event) {
   draggingZonePointIndex.value = index
 }
 
+/**
+ * Перемещает выбранную вершину зоны в координатах исходного плана.
+ *
+ * Функция использует `getRoutePointerOriginal`, поэтому вершина сохраняется в
+ * той же системе координат, что и `points_json` на backend.
+ */
 function moveZonePoint(event) {
   const point = getRoutePointerOriginal(event)
   if (!point || draggingZonePointIndex.value === null) return
@@ -888,6 +1103,13 @@ function startDragSavedZone(zone, event) {
   startDragZonePolygon(event)
 }
 
+/**
+ * Начинает перетаскивание всей сохранённой зоны камеры.
+ *
+ * Если оператор тянет сам polygon, а не отдельную вершину, текущая зона
+ * копируется в черновик и дальше двигается целиком. Это быстрее, чем двигать
+ * четыре точки по одной, когда зона в целом правильная, но немного смещена.
+ */
 function startDragZonePolygon(event) {
   if (!isEditingCameraZone.value || !activeCamera.value) return
   if (event.button !== 0 || zoneDraftPoints.value.length < 3) return
@@ -903,6 +1125,13 @@ function startDragZonePolygon(event) {
   }
 }
 
+/**
+ * Перемещает всю зону, не давая ей выйти за границы исходного изображения.
+ *
+ * Смещение рассчитывается относительно стартовой точки drag. Затем оно
+ * ограничивается так, чтобы минимальная и максимальная координаты полигона
+ * остались внутри плана. Это предотвращает сохранение зоны за пределами этажа.
+ */
 function moveZonePolygon(event) {
   if (!draggingZonePolygon.value) return
   const point = getRoutePointerOriginal(event)
@@ -939,6 +1168,13 @@ function resetActiveZoneDraft() {
   draggingZonePolygon.value = null
 }
 
+/**
+ * Сохраняет зону видимости камеры через API и синхронизирует локальный список.
+ *
+ * Endpoint возвращает уже нормализованную зону. Если зона этой камеры была в
+ * массиве, она заменяется; если зоны не было, добавляется новая. Это устраняет
+ * проблему “двух зон” для одной камеры на экране.
+ */
 async function persistCameraZone(cameraId, points, { showSuccess = true } = {}) {
   const response = await cameraVisibilityApi.saveCameraZone(cameraId, {
     floor_id: Number(selectedFloorId.value),
@@ -963,6 +1199,12 @@ async function persistCameraZone(cameraId, points, { showSuccess = true } = {}) 
   return nextZone
 }
 
+/**
+ * Сохраняет текущую зону выбранной камеры.
+ *
+ * Backend принимает только 4 точки. Проверка на frontend нужна не вместо
+ * backend-валидации, а ради понятного сообщения оператору до отправки запроса.
+ */
 async function saveActiveCameraZone() {
   if (!activeCamera.value || !selectedFloorId.value) return
   if (editableZonePoints.value.length !== 4) return ui.warn('Зона видимости должна содержать ровно 4 точки')
@@ -977,6 +1219,12 @@ async function saveActiveCameraZone() {
   }
 }
 
+/**
+ * Удаляет зону видимости выбранной камеры после подтверждения.
+ *
+ * Удаление не затрагивает саму камеру. Это нужно, когда зона была размечена
+ * неправильно или камера больше не участвует в построении маршрута гостя.
+ */
 async function deleteActiveCameraZone() {
   if (!activeCamera.value) return
   const confirmed = await ui.confirm({
@@ -1000,6 +1248,13 @@ async function deleteActiveCameraZone() {
   }
 }
 
+/**
+ * Создаёт одиночную точку графа маршрутов по клику на плане.
+ *
+ * Точка создаётся только в режиме разметки и только у пользователя с правами
+ * редактирования. Координаты берутся в пикселях исходного плана, чтобы backend
+ * мог хранить граф независимо от текущего масштаба изображения в браузере.
+ */
 async function createRouteNodeAt(event) {
   if (!canEditPlan.value || graphMode.value !== 'markup' || isEditMode.value || !selectedFloorId.value) return
   if (event.button !== 0) return
@@ -1010,6 +1265,13 @@ async function createRouteNodeAt(event) {
   await createRouteNodeFromPoint(point)
 }
 
+/**
+ * Отправляет создание точки графа в backend и добавляет её в локальный список.
+ *
+ * Параметр `resetPath` нужен для разных сценариев. При обычном создании точки
+ * построенный тестовый путь очищается. При автоматическом создании точки во
+ * время протягивания линии путь не сбрасывается до завершения всей операции.
+ */
 async function createRouteNodeFromPoint(point, { resetPath = true } = {}) {
   try {
     const response = await routeGraphApi.createNode(selectedFloorId.value, point)
@@ -1023,6 +1285,13 @@ async function createRouteNodeFromPoint(point, { resetPath = true } = {}) {
   }
 }
 
+/**
+ * Обрабатывает клик по SVG-слою плана.
+ *
+ * Один и тот же SVG используется и для зон камер, и для графа маршрутов.
+ * Поэтому сначала проверяется режим редактирования зоны: если оператор сейчас
+ * ставит точки зоны камеры, клик не должен случайно создать точку маршрута.
+ */
 function onRouteSvgPointerDown(event) {
   if (isEditingCameraZone.value) {
     addZoneDraftPoint(event)
@@ -1031,6 +1300,13 @@ function onRouteSvgPointerDown(event) {
   void createRouteNodeAt(event)
 }
 
+/**
+ * Начинает протягивание новой линии от существующей точки маршрута.
+ *
+ * Во время движения мыши линия хранится как `draftRouteEdge` и рисуется только
+ * визуально. Реальное ребро в базе создаётся позже, когда пользователь
+ * отпустит мышь на другой точке, на пустом месте или на существующей линии.
+ */
 function onRouteNodePointerDown(node, event) {
   if (!canEditPlan.value || graphMode.value !== 'markup' || isEditMode.value) return
   if (event.button !== 0) return
@@ -1046,6 +1322,13 @@ function onRouteNodePointerDown(node, event) {
   }
 }
 
+/**
+ * Обновляет временную линию и обрабатывает drag вершин/полигона зоны.
+ *
+ * Порядок проверок важен: если пользователь двигает зону камеры, этот drag не
+ * должен восприниматься как построение линии маршрута. Только когда нет
+ * активного zone-drag, координаты мыши применяются к `draftRouteEdge`.
+ */
 function onRouteSvgPointerMove(event) {
   if (draggingZonePolygon.value) {
     moveZonePolygon(event)
@@ -1068,12 +1351,27 @@ function onRouteSvgPointerMove(event) {
   }
 }
 
+/**
+ * Сбрасывает временные drag-состояния SVG.
+ *
+ * Эта функция используется, когда пользователь прервал построение линии или
+ * редактирование зоны. Она не трогает сохранённые данные, а очищает только
+ * временную визуальную операцию.
+ */
 function cancelDraftRouteEdge() {
   draftRouteEdge.value = null
   draggingZonePointIndex.value = null
   draggingZonePolygon.value = null
 }
 
+/**
+ * Завершает протягивание линии на пустом месте SVG.
+ *
+ * Если оператор тянет линию от точки и отпускает мышь там, где нет другой
+ * точки, система автоматически создаёт новую точку и соединяет её с начальной.
+ * Это делает разметку быстрее: не нужно сначала отдельно ставить точку, а
+ * потом второй операцией соединять её линией.
+ */
 async function onRouteSvgPointerUp(event) {
   if (draggingZonePolygon.value) {
     draggingZonePolygon.value = null
@@ -1099,11 +1397,24 @@ async function onRouteSvgPointerUp(event) {
   await createRouteEdgeBetween(draft.fromNodeId, targetNode.id, { rollbackNodeId: targetNode.id })
 }
 
+/**
+ * Завершает протягивание линии на существующей точке графа.
+ *
+ * В этом сценарии новая точка не создаётся: backend получает id начальной и
+ * конечной точки и создаёт ребро между ними.
+ */
 function onRouteNodePointerUp(node, event) {
   if (!draftRouteEdge.value || event.button !== 0) return
   void finishRouteEdgeDrag(node)
 }
 
+/**
+ * Завершает протягивание линии на существующей линии графа.
+ *
+ * Пользователь может отпустить мышь не на точке, а на линии. Тогда линия
+ * разбивается: на месте отпускания создаётся новая точка, старое ребро
+ * заменяется двумя новыми, и новая протянутая линия подключается к этой точке.
+ */
 function onRouteEdgePointerUp(edge, event) {
   const draft = draftRouteEdge.value
   if (!draft || event.button !== 0) return
@@ -1118,6 +1429,13 @@ function onRouteEdgePointerUp(edge, event) {
   void splitRouteEdgeAtPoint(edge, point, { connectFromNodeId: draft.fromNodeId })
 }
 
+/**
+ * Обрабатывает обычный клик по линии графа.
+ *
+ * В режиме разметки клик вставляет точку в линию, потому что это самый частый
+ * сценарий правки графа. В режиме построения пути линия просто выделяется как
+ * выбранная, не меняя структуру графа.
+ */
 function onRouteEdgeClick(edge, event) {
   if (suppressNextRouteEdgeClick) {
     suppressNextRouteEdgeClick = false
@@ -1132,6 +1450,12 @@ function onRouteEdgeClick(edge, event) {
   selectRouteEdge(edge.id)
 }
 
+/**
+ * Создаёт ребро между двумя уже существующими точками графа.
+ *
+ * Если начальная и конечная точки совпадают, операция игнорируется: линия из
+ * точки в саму себя не имеет смысла для Дейкстры и только портит граф.
+ */
 async function finishRouteEdgeDrag(targetNode) {
   const draft = draftRouteEdge.value
   draftRouteEdge.value = null
@@ -1140,6 +1464,12 @@ async function finishRouteEdgeDrag(targetNode) {
   await createRouteEdgeBetween(draft.fromNodeId, targetNode.id)
 }
 
+/**
+ * Отправляет создание линии маршрута в backend.
+ *
+ * Backend сам рассчитывает вес ребра по расстоянию между точками и проверяет
+ * дубли. Frontend передаёт только id точек и признак двустороннего движения.
+ */
 async function persistRouteEdge(fromNodeId, toNodeId, isBidirectional = true) {
   const response = await routeGraphApi.createEdge(selectedFloorId.value, {
     from_node_id: fromNodeId,
@@ -1149,6 +1479,13 @@ async function persistRouteEdge(fromNodeId, toNodeId, isBidirectional = true) {
   return response.data
 }
 
+/**
+ * Обновляет локальную коллекцию линий после ответа backend.
+ *
+ * Операции разбиения линии могут создавать несколько новых рёбер. Функция
+ * аккуратно заменяет ребро, если оно уже есть, или добавляет новое, если id
+ * встретился впервые.
+ */
 function upsertRouteEdge(nextEdge) {
   const existingIndex = routeEdges.value.findIndex((edge) => edge.id === nextEdge.id)
   if (existingIndex >= 0) {
@@ -1158,6 +1495,13 @@ function upsertRouteEdge(nextEdge) {
   }
 }
 
+/**
+ * Создаёт связь между двумя точками и при необходимости откатывает новую точку.
+ *
+ * Откат нужен для сценария “протянул линию в пустое место”: сначала создаётся
+ * новая точка, потом ребро. Если создание ребра не удалось, новая точка должна
+ * быть удалена, иначе на плане останется лишняя несвязанная вершина.
+ */
 async function createRouteEdgeBetween(fromNodeId, toNodeId, { rollbackNodeId = null } = {}) {
   try {
     const nextEdge = await persistRouteEdge(fromNodeId, toNodeId)
@@ -1182,6 +1526,14 @@ async function splitRouteEdgeAtPointer(edge, event) {
   await splitRouteEdgeAtPoint(edge, point)
 }
 
+/**
+ * Разбивает линию по координате клика/отпускания мыши.
+ *
+ * Алгоритм делает четыре шага: вычисляет точку на самом отрезке, создаёт новую
+ * вершину, создаёт два ребра вместо старого и удаляет старое ребро. Если линия
+ * протягивалась от другой точки, она дополнительно подключается к новой
+ * вершине. При ошибке новая точка удаляется, а граф перезагружается с backend.
+ */
 async function splitRouteEdgeAtPoint(edge, point, { connectFromNodeId = null } = {}) {
   if (!canEditPlan.value || graphMode.value !== 'markup' || isEditMode.value || !selectedFloorId.value) return
   if (!edge?.id) return
@@ -1226,6 +1578,14 @@ function selectRouteEdge(edgeId) {
   selectedRouteEdgeId.value = edgeId
 }
 
+/**
+ * Удаляет точку графа и все связанные с ней линии.
+ *
+ * Backend выполняет фактическое удаление, а frontend сразу чистит локальное
+ * состояние, чтобы пользователь видел результат без дополнительной перезагрузки
+ * страницы. Если удалённая точка участвовала в тестовом маршруте, маршрут
+ * сбрасывается.
+ */
 async function deleteRouteNode(nodeId) {
   if (!canEditPlan.value) return
 
@@ -1243,6 +1603,13 @@ async function deleteRouteNode(nodeId) {
   }
 }
 
+/**
+ * Удаляет выбранную линию маршрута.
+ *
+ * Эта операция не удаляет сами точки, потому что одна точка может быть частью
+ * нескольких маршрутов. После удаления линия убирается из локального массива и
+ * сбрасывается построенный путь.
+ */
 async function deleteRouteEdge(edgeId) {
   if (!canEditPlan.value) return
 
@@ -1260,6 +1627,12 @@ function clearRoutePath() {
   resetRouteSelection()
 }
 
+/**
+ * Полностью очищает граф маршрутов выбранного этажа после подтверждения.
+ *
+ * Камеры, зоны видимости и изображение плана при этом не меняются. Очищается
+ * только технический граф точек и линий, по которому строятся маршруты.
+ */
 async function confirmClearRouteGraph() {
   if (!canEditPlan.value || !selectedFloorId.value) return
   const confirmed = await ui.confirm({
@@ -1279,6 +1652,13 @@ async function confirmClearRouteGraph() {
   }
 }
 
+/**
+ * Выбирает начальную и конечную точку для проверки кратчайшего маршрута.
+ *
+ * Это пользовательский режим проверки разметки: оператор выбирает две точки, а
+ * backend строит маршрут по Дейкстре. Так можно быстро понять, связаны ли
+ * участки графа между собой и нет ли разрыва в коридоре.
+ */
 async function onRouteNodeClick(node) {
   if (graphMode.value !== 'path' || isEditMode.value) return
   selectedRouteEdgeId.value = null
@@ -1299,6 +1679,13 @@ async function onRouteNodeClick(node) {
   await buildRoutePath()
 }
 
+/**
+ * Запрашивает у backend кратчайший путь между двумя выбранными точками.
+ *
+ * Frontend не считает Дейкстру сам, чтобы не дублировать алгоритм и правила
+ * графа. Он отправляет id начальной и конечной точки, получает список точек
+ * найденного пути и отображает его отдельной подсвеченной полилинией.
+ */
 async function buildRoutePath() {
   if (!selectedFloorId.value || !routeStartNodeId.value || !routeEndNodeId.value) return
 
@@ -1322,6 +1709,13 @@ function onPlanImageError(event) {
   event.target.style.display = 'none'
 }
 
+/**
+ * Загружает первичные данные страницы: список зданий и первый доступный этаж.
+ *
+ * Страница не может показывать план без выбранного здания. Поэтому после
+ * получения списка зданий автоматически выбирается первое, если пользователь
+ * ещё ничего не выбрал. Дальше watcher `selectedBuildingId` загрузит этажи.
+ */
 async function loadInitialData() {
   try {
     const response = await buildingsApi.getBuildings()
@@ -1337,6 +1731,13 @@ async function loadInitialData() {
   }
 }
 
+/**
+ * Загружает этажи выбранного здания и сохраняет корректный выбранный этаж.
+ *
+ * Если текущий `selectedFloorId` больше не существует в новом списке этажей,
+ * например после переключения здания, выбирается первый этаж. Это защищает
+ * страницу от состояния “выбрано здание A, но этаж принадлежит зданию B”.
+ */
 async function loadFloorsForBuilding(buildingId) {
   floorsLoading.value = true
   try {
@@ -1355,6 +1756,13 @@ async function loadFloorsForBuilding(buildingId) {
   }
 }
 
+/**
+ * Загружает полный контекст выбранного этажа.
+ *
+ * Контекст включает сам этаж, камеры, ручной граф маршрутов и зоны видимости.
+ * После загрузки обновляется `planVersion`, чтобы браузер не показывал старую
+ * картинку плана из кэша, и пересчитываются размеры SVG-слоя поверх изображения.
+ */
 async function loadFloorContext() {
   if (!selectedBuildingId.value || !selectedFloorId.value) {
     mappedCameras.value = []
@@ -1392,6 +1800,12 @@ async function loadFloorContext() {
   }
 }
 
+/**
+ * Открывает форму создания здания.
+ *
+ * Это техническое действие доступно только пользователю с правами редактировать
+ * план здания. Само сохранение выполняется отдельной функцией `saveBuilding`.
+ */
 function openBuildingModal() {
   if (!canEditPlan.value) return
   buildingForm.value = { name: '', address: '' }
@@ -1403,6 +1817,13 @@ function closeBuildingModal() {
   buildingSaving.value = false
 }
 
+/**
+ * Создаёт новое здание и переключает страницу на него.
+ *
+ * После ответа backend список зданий перезагружается, чтобы интерфейс получил
+ * ровно те данные, которые сохранены в БД, а не опирался только на локальную
+ * форму.
+ */
 async function saveBuilding() {
   if (!canEditPlan.value) return
   if (!buildingForm.value.name.trim()) return ui.warn('Введите название здания')
@@ -1423,6 +1844,13 @@ async function saveBuilding() {
   }
 }
 
+/**
+ * Открывает форму создания или редактирования этажа.
+ *
+ * При редактировании форма заполняется текущими данными этажа, а при создании
+ * получает id выбранного здания. План этажа загружается как файл через FormData,
+ * поэтому поле `planFile` хранится отдельно от обычных строковых данных формы.
+ */
 function openFloorModal(editCurrent = false) {
   if (!canEditPlan.value) return
   if (!selectedBuildingId.value) return ui.warn('Сначала выберите или создайте здание')
@@ -1458,6 +1886,14 @@ function onFloorPlanSelected(event) {
   floorForm.value.planFile = event.target.files?.[0] || null
 }
 
+/**
+ * Создаёт или обновляет этаж вместе с изображением плана.
+ *
+ * Для передачи файла используется `FormData`, потому что план этажа хранится
+ * как бинарное изображение на backend. После сохранения данные страницы
+ * перезагружаются и выбранный этаж переключается на созданный или обновлённый,
+ * чтобы оператор сразу видел актуальную картинку плана.
+ */
 async function saveFloor() {
   if (!canEditPlan.value) return
   if (!floorForm.value.building_id || !floorForm.value.name.trim() || floorForm.value.floor_number === '') {
@@ -1503,6 +1939,13 @@ async function saveFloor() {
   }
 }
 
+/**
+ * При смене здания сбрасывает всё, что относится к старому этажу.
+ *
+ * Камеры, граф маршрутов и зоны видимости принадлежат конкретному этажу. Если
+ * пользователь переключил здание, старые данные нельзя оставлять на экране даже
+ * на короткое время, иначе можно случайно сохранить их не туда.
+ */
 watch(selectedBuildingId, async (newValue) => {
   isEditMode.value = false
   activeCameraId.value = null
@@ -1515,6 +1958,13 @@ watch(selectedBuildingId, async (newValue) => {
   await loadFloorsForBuilding(newValue)
 })
 
+/**
+ * При смене этажа загружает его камеры, зоны и граф маршрутов.
+ *
+ * Это центральная реакция страницы на выбор этажа. Все черновики редактирования
+ * отключаются, потому что они относятся к предыдущему плану и не должны
+ * переноситься на новый этаж.
+ */
 watch(selectedFloorId, async (newValue) => {
   isEditMode.value = false
   activeCameraId.value = null
@@ -1527,6 +1977,13 @@ watch(selectedFloorId, async (newValue) => {
   await loadFloorContext()
 })
 
+/**
+ * Инициализирует страницу после монтирования компонента.
+ *
+ * Помимо загрузки данных, здесь подключается отслеживание размера контейнера
+ * плана. Это нужно для корректного SVG-слоя: если окно браузера изменилось,
+ * размеры плана пересчитываются и клики снова попадают в правильные координаты.
+ */
 onMounted(async () => {
   await loadInitialData()
   window.addEventListener('resize', updatePlanImageMetrics)
@@ -1536,6 +1993,13 @@ onMounted(async () => {
   }
 })
 
+/**
+ * Освобождает ресурсы страницы при уходе пользователя.
+ *
+ * Удаляются слушатели resize, отключается ResizeObserver и закрывается
+ * WebSocket-плеер камеры. Без этого фоновые соединения и обработчики могли бы
+ * продолжить жить после перехода на другую страницу.
+ */
 onBeforeUnmount(() => {
   window.removeEventListener('resize', updatePlanImageMetrics)
   if (planResizeObserver) {

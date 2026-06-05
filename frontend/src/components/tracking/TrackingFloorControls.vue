@@ -46,6 +46,14 @@
 </template>
 
 <script setup>
+/**
+ * Контролы выбора здания и этажа на странице плана.
+ *
+ * Компонент показывает только верхний уровень навигации по объекту и кнопки
+ * входа/выхода из режима редактирования. Проверка `canEditPlan` нужна, чтобы
+ * оператор КПП или аналитик могли смотреть план, но не видели кнопки изменения
+ * камер, этажей и изображений плана.
+ */
 defineProps({
   buildings: {
     type: Array,
@@ -89,10 +97,12 @@ const emit = defineEmits([
   'save-plan',
 ])
 
+/** Передать родителю новое здание и тем самым запустить загрузку этажей. */
 function updateBuilding(event) {
   emit('update:selectedBuildingId', event.target.value)
 }
 
+/** Передать родителю новый этаж для загрузки плана, камер, зон и графа. */
 function updateFloor(event) {
   emit('update:selectedFloorId', event.target.value)
 }

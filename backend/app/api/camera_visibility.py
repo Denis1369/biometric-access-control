@@ -1,3 +1,12 @@
+"""API зон видимости камер на плане этажа.
+
+Зона видимости — это четырёхугольник, который оператор рисует вокруг участка
+плана, попадающего в обзор конкретной камеры. Эти зоны используются не для
+распознавания по видео, а для связывания событий камеры с графом маршрутов:
+если гость найден на камере, система считает, что он мог находиться на линиях
+графа, пересекающих эту зону.
+"""
+
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
@@ -14,16 +23,22 @@ from app.models.floors import Floor
 router = APIRouter(prefix="/api", tags=["Зоны видимости камер"])
 
 class CameraZonePoint(SQLModel):
+    """Одна точка полигона зоны видимости в координатах исходного плана."""
+
     x: float = Field(ge=0)
     y: float = Field(ge=0)
 
 
 class CameraZoneUpsert(SQLModel):
+    """Запрос на создание или обновление зоны видимости камеры."""
+
     floor_id: int
     points: list[CameraZonePoint]
 
 
 class CameraZoneRead(SQLModel):
+    """Зона видимости в формате, удобном для отрисовки SVG-полигона."""
+
     id: int
     camera_id: int
     floor_id: int
@@ -33,10 +48,18 @@ class CameraZoneRead(SQLModel):
 
 
 class FloorCameraZonesRead(SQLModel):
+    """Ответ со всеми зонами видимости камер выбранного этажа."""
+
     zones: list[CameraZoneRead]
 
 
 def _zone_to_read(zone: CameraVisibilityZone) -> CameraZoneRead:
+    """Преобразовать модель БД в DTO, где `points_json` называется просто `points`.
+
+    В базе точки лежат в JSON-поле, а frontend работает с обычным массивом точек.
+    Эта функция делает преобразование в одном месте, чтобы endpoint-ы не
+    дублировали логику и всегда возвращали одинаковую структуру.
+    """
     return CameraZoneRead(
         id=zone.id,
         camera_id=zone.camera_id,
@@ -48,6 +71,14 @@ def _zone_to_read(zone: CameraVisibilityZone) -> CameraZoneRead:
 
 
 def _validate_points(points: list[CameraZonePoint]) -> list[dict[str, float]]:
+    """Проверить, что зона камеры задана ровно четырьмя точками.
+
+    Для дипломного сценария выбран простой и управляемый формат зоны видимости:
+    произвольный четырёхугольник. Он достаточно гибкий для коридора или холла,
+    но не требует сложного редактора многоугольников. Отрицательные координаты
+    запрещены схемой `CameraZonePoint`, потому что координаты считаются от
+    левого верхнего угла исходного изображения плана.
+    """
     if len(points) != 4:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -64,6 +95,12 @@ def _validate_points(points: list[CameraZonePoint]) -> list[dict[str, float]]:
     dependencies=[Depends(require_permissions(CAMERA_ZONES_READ))],
 )
 def get_floor_camera_zones(floor_id: int, session: Session = Depends(get_session)):
+    """Вернуть все зоны видимости активных камер этажа.
+
+    Endpoint используется страницей плана здания, чтобы зоны всегда были видны
+    поверх изображения плана. Join с таблицей камер нужен, чтобы не показывать
+    «осиротевшие» зоны, если камера была удалена или перенесена на другой этаж.
+    """
     floor = session.get(Floor, floor_id)
     if not floor:
         raise HTTPException(
@@ -90,6 +127,12 @@ def get_floor_camera_zones(floor_id: int, session: Session = Depends(get_session
     dependencies=[Depends(require_permissions(CAMERA_ZONES_READ))],
 )
 def get_camera_zone(camera_id: int, session: Session = Depends(get_session)):
+    """Вернуть зону видимости конкретной камеры или `null`, если зона не задана.
+
+    Frontend вызывает этот endpoint при выборе камеры в режиме редактирования.
+    Если в базе случайно осталась зона с другим `floor_id`, она не отдаётся, чтобы
+    пользователь не увидел неверный полигон на текущем плане.
+    """
     camera = session.get(Camera, camera_id)
     if not camera:
         raise HTTPException(
@@ -116,6 +159,13 @@ def upsert_camera_zone(
     payload: CameraZoneUpsert,
     session: Session = Depends(get_session),
 ):
+    """Создать новую или обновить существующую зону видимости камеры.
+
+    Перед сохранением backend проверяет, что камера существует, действительно
+    находится на выбранном этаже и что сам этаж существует. Это защищает от
+    ситуации, когда frontend отправил устаревшие данные после смены здания,
+    удаления камеры или перезагрузки страницы.
+    """
     camera = session.get(Camera, camera_id)
     if not camera:
         raise HTTPException(
@@ -171,6 +221,12 @@ def upsert_camera_zone(
     dependencies=[Depends(require_permissions(CAMERA_ZONES_WRITE))],
 )
 def delete_camera_zone(camera_id: int, session: Session = Depends(get_session)):
+    """Удалить зону видимости камеры, не удаляя саму камеру.
+
+    Оператор может заново разметить обзор камеры: сначала удалить старую зону,
+    затем нарисовать новую. Если зоны уже нет, endpoint всё равно возвращает 204,
+    потому что итоговое состояние достигнуто — у камеры зоны нет.
+    """
     camera = session.get(Camera, camera_id)
     if not camera:
         raise HTTPException(

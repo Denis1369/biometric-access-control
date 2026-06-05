@@ -1,7 +1,21 @@
+/**
+ * Получает 2D-контекст canvas с настройками для частого обновления кадров.
+ *
+ * `desynchronized` просит браузер уменьшить задержку отрисовки, что полезно
+ * для live-потока камеры. Если браузер не поддерживает опцию, он просто
+ * проигнорирует её.
+ */
 function getCanvasContext(canvas) {
   return canvas.getContext('2d', { alpha: false, desynchronized: true })
 }
 
+/**
+ * Подгоняет внутреннее разрешение canvas под текущий размер элемента.
+ *
+ * CSS-размер canvas и его bitmap-размер могут отличаться. Если не синхронизировать
+ * их, изображение камеры будет мыльным или растянутым. Функция возвращает
+ * актуальный размер области рисования.
+ */
 function fitCanvasToElement(canvas, sourceWidth, sourceHeight) {
   const width = Math.max(1, Math.round(canvas.clientWidth || sourceWidth || 1))
   const height = Math.max(1, Math.round(canvas.clientHeight || sourceHeight || 1))
@@ -16,6 +30,13 @@ function fitCanvasToElement(canvas, sourceWidth, sourceHeight) {
   return { width, height }
 }
 
+/**
+ * Нарисовать кадр по центру canvas с сохранением пропорций.
+ *
+ * Кадры камер могут иметь разное соотношение сторон, а карточка просмотра в UI
+ * может быть шире или уже. Поэтому используется `object-fit: contain` в ручном
+ * виде: чёрный фон и масштабирование без обрезания кадра.
+ */
 function drawToCanvas(canvas, source) {
   const ctx = getCanvasContext(canvas)
   if (!ctx) return
@@ -36,12 +57,20 @@ function drawToCanvas(canvas, source) {
   ctx.drawImage(source, offsetX, offsetY, drawWidth, drawHeight)
 }
 
+/** Очистить canvas при закрытии потока или уходе со страницы. */
 function clearCanvas(canvas) {
   const ctx = getCanvasContext(canvas)
   if (!ctx) return
   ctx.clearRect(0, 0, canvas.width, canvas.height)
 }
 
+/**
+ * Декодировать JPEG-пакет из WebSocket в объект, который можно нарисовать.
+ *
+ * В современных браузерах используется `createImageBitmap`, потому что он
+ * быстрее и умеет освобождать ресурсы через `close()`. Для fallback создаётся
+ * обычный `Image` через object URL.
+ */
 async function decodeFrame(payload) {
   const blob = payload instanceof Blob ? payload : new Blob([payload], { type: 'image/jpeg' })
 
@@ -65,12 +94,21 @@ async function decodeFrame(payload) {
   })
 }
 
+/** Освободить декодированный кадр, если браузер поддерживает `ImageBitmap.close`. */
 function closeDecodedFrame(frame) {
   if (frame && typeof frame.close === 'function') {
     frame.close()
   }
 }
 
+/**
+ * Создать player live-потока камеры на базе WebSocket и canvas.
+ *
+ * Backend отправляет бинарные JPEG-кадры. Player хранит только последний
+ * полученный payload: если декодирование не успевает за потоком, старые кадры
+ * выбрасываются. Для видеонаблюдения это правильнее, чем копить очередь и
+ * показывать оператору картинку с задержкой.
+ */
 export function createCanvasStreamPlayer({
   url,
   canvas,

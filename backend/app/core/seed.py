@@ -1,3 +1,17 @@
+"""Демо-наполнение базы данных для разработки, презентации и контрольного примера.
+
+Seed не является основной бизнес-логикой СКУД. Его задача — создать аккуратные
+данные, с которыми интерфейс выглядит живым сразу после запуска: отделы,
+должности, сотрудников, здания, этажи, камеры, планы помещений, гостей и
+историю событий прохода. Это особенно полезно для дипломной защиты, где важно
+показать не пустые таблицы, а цельный сценарий работы системы.
+
+Функции seed-а стараются не затирать реальные данные. Если в базе уже есть
+основные бизнес-сущности, повторный запуск не создаёт новый демо-набор. Отдельно
+поддерживается создание стандартного администратора admin/admin, чтобы после
+первого запуска можно было войти в систему.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -26,6 +40,13 @@ SEED_RANDOM = 20260410
 
 @dataclass(frozen=True)
 class DepartmentSpec:
+    """Описание отдела, из которого seed создаёт Department и должности.
+
+    Это не модель БД, а шаблон демо-данных: название отдела, рабочий график,
+    список должностей и количество сотрудников, которых нужно сгенерировать для
+    презентационного набора.
+    """
+
     name: str
     work_start: time
     work_end: time
@@ -37,6 +58,8 @@ class DepartmentSpec:
 
 @dataclass(frozen=True)
 class RoomSpec:
+    """Прямоугольная зона на демонстрационном SVG-плане этажа."""
+
     label: str
     x: int
     y: int
@@ -47,6 +70,13 @@ class RoomSpec:
 
 @dataclass(frozen=True)
 class CameraSpec:
+    """Шаблон камеры для демо-здания.
+
+    plan_x и plan_y хранятся как относительные координаты от 0 до 1, потому что
+    карточка камеры на плане должна оставаться на правильном месте при
+    масштабировании изображения.
+    """
+
     key: str
     name: str
     ip_address: str
@@ -58,6 +88,8 @@ class CameraSpec:
 
 @dataclass(frozen=True)
 class FloorSpec:
+    """Шаблон этажа с комнатами и камерами для seed-генерации."""
+
     key: str
     name: str
     floor_number: int
@@ -67,6 +99,8 @@ class FloorSpec:
 
 @dataclass(frozen=True)
 class BuildingSpec:
+    """Шаблон здания, объединяющий этажи, планы и камеры."""
+
     name: str
     address: str
     floors: tuple[FloorSpec, ...]
@@ -74,6 +108,13 @@ class BuildingSpec:
 
 @dataclass(frozen=True)
 class GuestSpec:
+    """Шаблон гостя и его демонстрационных посещений.
+
+    visit_offsets задаёт, в какие дни относительно сегодня гость должен иметь
+    события. Так дашборд и журнал гостей получают правдоподобную историю за
+    несколько дней, а не случайный одноразовый проход.
+    """
+
     last_name: str
     first_name: str
     middle_name: str | None
@@ -89,6 +130,8 @@ class GuestSpec:
 
 @dataclass
 class EmployeeContext:
+    """Контекст созданного сотрудника для генерации событий посещаемости."""
+
     employee: Employee
     department: Department
     site_key: str
@@ -96,6 +139,8 @@ class EmployeeContext:
 
 @dataclass
 class GuestContext:
+    """Контекст созданного гостя для генерации AccessLog и TrackingLog."""
+
     guest: Guest
     host: Employee
     site_key: str
@@ -291,6 +336,22 @@ FEMALE_MIDDLE_NAMES = (
 
 
 def ensure_demo_data(session: Session) -> bool:
+    """Гарантировать наличие базового демо-набора данных.
+
+    Функция вызывается при старте приложения. Сначала всегда проверяется
+    стандартный супер-администратор, чтобы в систему можно было войти. Затем
+    проверяется, есть ли уже бизнес-данные: сотрудники, здания, камеры, гости
+    или события. Если база не пустая, seed не запускается, чтобы не смешивать
+    реальные данные пользователя с демонстрационными.
+
+    Параметры:
+        session: Сессия БД, открытая на старте приложения.
+
+    Возвращает:
+        True, если демо-данные были созданы; False, если база уже содержала
+        рабочие данные и seed был пропущен.
+    """
+
     had_business_data = _has_business_data(session)
     ensure_default_super_admin(session)
     if had_business_data:
@@ -301,6 +362,21 @@ def ensure_demo_data(session: Session) -> bool:
 
 
 def ensure_default_super_admin(session: Session) -> User:
+    """Создать или восстановить стандартного администратора admin/admin.
+
+    Это учебный и демонстрационный проект, поэтому после первого запуска должен
+    быть гарантированный вход в систему. Если пользователь admin уже существует,
+    функция приводит его пароль, роль и активность к ожидаемому состоянию. Это
+    помогает, когда база очищалась частично или роль администратора была случайно
+    изменена во время тестирования.
+
+    Параметры:
+        session: Сессия БД.
+
+    Возвращает:
+        Модель пользователя super_admin.
+    """
+
     user = session.exec(
         select(User).where(User.username == DEFAULT_ADMIN_USERNAME)
     ).first()
@@ -338,6 +414,18 @@ def ensure_default_super_admin(session: Session) -> User:
 
 
 def seed_demo_data(session: Session) -> None:
+    """Создать полный демонстрационный набор данных.
+
+    Seed создаёт отделы, должности, здания, этажи с SVG-планами, камеры,
+    сотрудников, гостей и историю AccessLog/TrackingLog за несколько дней.
+    Генератор случайности использует фиксированный SEED_RANDOM, поэтому данные
+    получаются повторяемыми: это удобно для документации, слайдов и проверки
+    контрольного примера.
+
+    Параметры:
+        session: Сессия БД, в которую записывается демо-набор.
+    """
+
     rng = random.Random(SEED_RANDOM)
 
     departments = _seed_departments(session)
@@ -360,6 +448,14 @@ def seed_demo_data(session: Session) -> None:
 
 
 def _has_business_data(session: Session) -> bool:
+    """Понять, можно ли безопасно запускать демо-наполнение.
+
+    Функция проверяет наличие ключевых бизнес-сущностей. Если пользователь уже
+    создал хотя бы часть реальных данных, seed лучше не запускать: иначе в
+    интерфейсе появится смешанный набор из демонстрационных и пользовательских
+    записей.
+    """
+
     models = (
         Department,
         JobPosition,
@@ -375,6 +471,13 @@ def _has_business_data(session: Session) -> bool:
 
 
 def _password_matches(plain_password: str, password_hash: str) -> bool:
+    """Безопасно проверить пароль seed-администратора.
+
+    Старые или повреждённые хэши могут вызвать ошибку passlib. Для seed-а это
+    не должно ломать запуск приложения, поэтому при ошибке возвращается False и
+    пароль администратора будет перезаписан новым корректным хэшем.
+    """
+
     try:
         return verify_password(plain_password, password_hash)
     except Exception:
@@ -382,6 +485,12 @@ def _password_matches(plain_password: str, password_hash: str) -> bool:
 
 
 def _seed_departments(session: Session) -> dict[str, Department]:
+    """Создать отделы с рабочими графиками.
+
+    Рабочий график отдела затем используется аналитикой посещаемости: по нему
+    определяется, опоздал сотрудник или ушёл раньше времени.
+    """
+
     departments: dict[str, Department] = {}
     for spec in DEPARTMENT_SPECS:
         department = Department(
@@ -398,6 +507,8 @@ def _seed_departments(session: Session) -> dict[str, Department]:
 
 
 def _seed_job_positions(session: Session, departments: dict[str, Department]) -> None:
+    """Создать справочник должностей для каждого демо-отдела."""
+
     for spec in DEPARTMENT_SPECS:
         department = departments[spec.name]
         for index, position_name in enumerate(spec.positions, start=1):
@@ -413,6 +524,13 @@ def _seed_job_positions(session: Session, departments: dict[str, Department]) ->
 
 
 def _seed_locations(session: Session) -> tuple[dict[str, Building], dict[str, Floor], dict[str, Camera]]:
+    """Создать здания, этажи, SVG-планы и камеры.
+
+    Для каждого этажа генерируется простое SVG-изображение плана. Камеры
+    размещаются на плане относительными координатами, чтобы раздел «План
+    здания» сразу показывал инфраструктуру без ручной настройки.
+    """
+
     buildings: dict[str, Building] = {}
     floors: dict[str, Floor] = {}
     cameras: dict[str, Camera] = {}
@@ -451,7 +569,8 @@ def _seed_locations(session: Session) -> tuple[dict[str, Building], dict[str, Fl
                 camera = Camera(
                     name=camera_spec.name,
                     ip_address=camera_spec.ip_address,
-                    # Demo cameras stay inactive until a real stream source is configured.
+                    # Демонстрационные камеры остаются отключёнными, пока техник
+                    # не настроит реальный поток или file-видео для анализа.
                     is_active=camera_spec.is_active,
                     building_id=building.id,
                     floor_id=floor.id,
@@ -471,6 +590,14 @@ def _seed_employees(
     departments: dict[str, Department],
     rng: random.Random,
 ) -> list[EmployeeContext]:
+    """Создать сотрудников и распределить их по отделам.
+
+    ФИО генерируются из подготовленных списков, но проверяются на уникальность,
+    чтобы карточки сотрудников в интерфейсе не выглядели как дубликаты. Для
+    каждого сотрудника сохраняется контекст с отделом и площадкой, который позже
+    используется при создании событий посещаемости.
+    """
+
     employee_contexts: list[EmployeeContext] = []
     used_names: set[tuple[str, str, str | None]] = set()
 
@@ -505,6 +632,15 @@ def _seed_guests(
     employees: list[EmployeeContext],
     rng: random.Random,
 ) -> list[GuestContext]:
+    """Создать демонстрационных гостей и связать их с принимающими сотрудниками.
+
+    Каждый гость получает сотрудника-хоста из нужного отдела. Срок действия
+    пропуска и активность берутся из GuestSpec, чтобы в интерфейсе были и
+    активные, и завершённые гостевые пропуска. ФИО гостей проверяются на
+    пересечение с сотрудниками, чтобы в демо не было неоднозначности, кого
+    распознала система.
+    """
+
     today = date.today()
     host_pool: dict[str, list[EmployeeContext]] = {}
     for context in employees:
@@ -556,6 +692,14 @@ def _seed_recent_activity(
     cameras: dict[str, Camera],
     rng: random.Random,
 ) -> None:
+    """Сгенерировать правдоподобные AccessLog и TrackingLog за последние дни.
+
+    Эта функция делает дашборд «живым»: сотрудники приходят и уходят, иногда
+    опаздывают, некоторые выходят на обед, гости посещают объект, а внутренние
+    камеры создают события TrackingLog. Данные не претендуют на реальную
+    статистическую модель, но дают понятный контрольный пример для презентации.
+    """
+
     now = datetime.now().replace(second=0, microsecond=0)
     today = now.date()
     site_cameras = {
@@ -731,6 +875,13 @@ def _seed_recent_activity(
 
 
 def _attendance_probability(department_name: str, is_weekend: bool) -> float:
+    """Вернуть вероятность появления сотрудника на работе в демо-данных.
+
+    Вероятность зависит от отдела и выходного дня. Например, безопасность чаще
+    работает в выходные, а офисные отделы почти не появляются. Это делает
+    месячную аналитику менее искусственной.
+    """
+
     if department_name == "Безопасность":
         return 0.82 if is_weekend else 0.95
     if department_name == "Логистика":
@@ -741,6 +892,13 @@ def _attendance_probability(department_name: str, is_weekend: bool) -> float:
 
 
 def _resolve_site_key(department_name: str, index: int) -> str:
+    """Определить площадку, на которой работает сотрудник.
+
+    Сотрудники логистики отправляются на складскую площадку, часть безопасности
+    распределяется между офисом и складом, остальные остаются в главном офисе.
+    Площадка нужна, чтобы события прохода создавались на подходящих камерах.
+    """
+
     if department_name == "Логистика":
         return "warehouse"
     if department_name == "Безопасность":
@@ -752,6 +910,13 @@ def _build_unique_name(
     rng: random.Random,
     used_names: set[tuple[str, str, str | None]],
 ) -> tuple[str, str, str]:
+    """Сгенерировать уникальное ФИО для сотрудника.
+
+    Seed берёт фамилии, имена и отчества из подготовленных списков. Повтор ФИО
+    не допускается, потому что в интерфейсе одинаковые карточки мешают проверке
+    журнала и аналитики.
+    """
+
     while True:
         is_female = rng.random() < 0.45
         if is_female:
@@ -773,6 +938,13 @@ def _build_unique_name(
 
 
 def _build_arrival_time(day: date, work_start: time, rng: random.Random) -> datetime:
+    """Сгенерировать время прихода сотрудника относительно начала рабочего дня.
+
+    Часть сотрудников приходит раньше, часть около начала смены, часть
+    опаздывает. Это нужно, чтобы график дисциплины показывал не нули, а
+    разнообразные демонстрационные данные.
+    """
+
     base = datetime.combine(day, work_start)
     late_roll = rng.random()
     if late_roll < 0.17:
@@ -785,6 +957,8 @@ def _build_arrival_time(day: date, work_start: time, rng: random.Random) -> date
 
 
 def _build_departure_time(day: date, work_end: time, rng: random.Random) -> datetime:
+    """Сгенерировать время ухода сотрудника относительно окончания рабочего дня."""
+
     base = datetime.combine(day, work_end)
     early_roll = rng.random()
     if early_roll < 0.12:
@@ -797,6 +971,12 @@ def _build_departure_time(day: date, work_end: time, rng: random.Random) -> date
 
 
 def _build_guest_arrival(day: date, arrival_window: tuple[int, int], rng: random.Random) -> datetime:
+    """Сгенерировать время прихода гостя внутри заданного дневного окна.
+
+    arrival_window хранится в минутах от начала суток, чтобы GuestSpec оставался
+    компактным и не зависел от конкретной даты.
+    """
+
     start_minutes, end_minutes = arrival_window
     selected_minutes = rng.randint(start_minutes, end_minutes)
     return datetime.combine(day, time.min) + timedelta(minutes=selected_minutes)
@@ -808,6 +988,14 @@ def _build_tracking_times(
     rng: random.Random,
     max_points: int = 3,
 ) -> list[datetime]:
+    """Сгенерировать моменты появления человека на внутренних камерах.
+
+    AccessLog фиксирует вход и выход, а TrackingLog показывает движение внутри
+    здания. Поэтому между приходом и уходом создаётся несколько случайных
+    временных точек, которые позже могут использоваться для демонстрации
+    вероятного маршрута.
+    """
+
     if end_time <= start_time + timedelta(minutes=15):
         return []
 
@@ -826,6 +1014,13 @@ def _build_floor_plan_svg(
     floor_number: int,
     rooms: tuple[RoomSpec, ...],
 ) -> bytes:
+    """Собрать простое SVG-изображение плана этажа для демо-данных.
+
+    В реальной работе техник может загрузить настоящий план здания. Для чистой
+    базы seed создаёт SVG-план автоматически, чтобы раздел «План здания» сразу
+    был пригоден для демонстрации камер, зон видимости и графа маршрутов.
+    """
+
     room_markup = "\n".join(
         (
             f'<g>'

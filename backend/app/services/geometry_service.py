@@ -1,3 +1,11 @@
+"""Небольшие геометрические функции для маршрутов и зон видимости камер.
+
+Координаты всегда задаются в пикселях исходного изображения плана. Это та же
+система координат, в которой хранятся точки графа маршрутов и полигоны зон
+видимости камер. Здесь намеренно нет тяжёлых геометрических библиотек: для
+демо-проекта достаточно простых проверок точки, отрезка и полигона.
+"""
+
 from __future__ import annotations
 
 import math
@@ -8,10 +16,18 @@ EPSILON = 1e-9
 
 
 def distance(a: Point, b: Point) -> float:
+    """Вернуть евклидово расстояние между двумя точками ``{"x", "y"}``."""
     return math.hypot(b["x"] - a["x"], b["y"] - a["y"])
 
 
 def _dedupe_points(points: list[Point]) -> list[Point]:
+    """Убрать почти совпадающие точки пересечения.
+
+    При касании отрезка вершины полигона одна и та же точка может появиться из
+    двух соседних сторон. Для маршрута это один и тот же якорь, поэтому близкие
+    точки схлопываются.
+    """
+
     unique: list[Point] = []
     for point in points:
         if any(distance(point, existing) <= 1e-6 for existing in unique):
@@ -21,10 +37,14 @@ def _dedupe_points(points: list[Point]) -> list[Point]:
 
 
 def _orientation(a: Point, b: Point, c: Point) -> float:
+    """Посчитать ориентацию трёх точек для проверки пересечения отрезков."""
+
     return (b["x"] - a["x"]) * (c["y"] - a["y"]) - (b["y"] - a["y"]) * (c["x"] - a["x"])
 
 
 def _on_segment(a: Point, b: Point, c: Point) -> bool:
+    """Проверить, лежит ли точка ``b`` на отрезке ``a-c`` с учётом погрешности."""
+
     return (
         min(a["x"], c["x"]) - EPSILON <= b["x"] <= max(a["x"], c["x"]) + EPSILON
         and min(a["y"], c["y"]) - EPSILON <= b["y"] <= max(a["y"], c["y"]) + EPSILON
@@ -33,6 +53,7 @@ def _on_segment(a: Point, b: Point, c: Point) -> bool:
 
 
 def segments_intersect(a1: Point, a2: Point, b1: Point, b2: Point) -> bool:
+    """Проверить, пересекаются ли два отрезка или касаются друг друга."""
     o1 = _orientation(a1, a2, b1)
     o2 = _orientation(a1, a2, b2)
     o3 = _orientation(b1, b2, a1)
@@ -51,6 +72,11 @@ def segments_intersect(a1: Point, a2: Point, b1: Point, b2: Point) -> bool:
 
 
 def segment_position(point: Point, p1: Point, p2: Point) -> float:
+    """Вернуть нормализованную позицию проекции точки на отрезок.
+
+    Результат ограничивается диапазоном ``0..1``: ``0`` соответствует ``p1``,
+    а ``1`` соответствует ``p2``.
+    """
     dx = p2["x"] - p1["x"]
     dy = p2["y"] - p1["y"]
     length_sq = dx * dx + dy * dy
@@ -61,6 +87,7 @@ def segment_position(point: Point, p1: Point, p2: Point) -> float:
 
 
 def point_on_segment_at(p1: Point, p2: Point, position: float) -> Point:
+    """Вернуть точку на отрезке ``p1-p2`` по нормализованной позиции ``0..1``."""
     clamped = max(0.0, min(1.0, position))
     return {
         "x": p1["x"] + (p2["x"] - p1["x"]) * clamped,
@@ -69,10 +96,12 @@ def point_on_segment_at(p1: Point, p2: Point, position: float) -> Point:
 
 
 def project_point_to_segment(point: Point, p1: Point, p2: Point) -> Point:
+    """Спроецировать точку на ближайшее место заданного отрезка."""
     return point_on_segment_at(p1, p2, segment_position(point, p1, p2))
 
 
 def segment_intersection_point(a1: Point, a2: Point, b1: Point, b2: Point) -> Point | None:
+    """Вернуть точку пересечения двух отрезков, если она существует."""
     if not segments_intersect(a1, a2, b1, b2):
         return None
 
@@ -101,6 +130,7 @@ def segment_intersection_point(a1: Point, a2: Point, b1: Point, b2: Point) -> Po
 
 
 def segment_polygon_intersection_points(p1: Point, p2: Point, polygon: list[Point]) -> list[Point]:
+    """Вернуть уникальные точки, где отрезок входит в полигон, выходит из него или касается его."""
     if len(polygon) < 3:
         return []
 
@@ -120,6 +150,7 @@ def segment_polygon_intersection_points(p1: Point, p2: Point, polygon: list[Poin
 
 
 def point_in_polygon(point: Point, polygon: list[Point]) -> bool:
+    """Проверить, находится ли точка внутри полигона или на его границе."""
     if len(polygon) < 3:
         return False
 
@@ -145,6 +176,7 @@ def point_in_polygon(point: Point, polygon: list[Point]) -> bool:
 
 
 def segment_intersects_polygon(p1: Point, p2: Point, polygon: list[Point]) -> bool:
+    """Проверить, касается ли отрезок полигона или имеет хотя бы один конец внутри него."""
     if len(polygon) < 3:
         return False
     if point_in_polygon(p1, polygon) or point_in_polygon(p2, polygon):
@@ -159,6 +191,7 @@ def segment_intersects_polygon(p1: Point, p2: Point, polygon: list[Point]) -> bo
 
 
 def route_edge_intersects_camera_zone(edge, from_node, to_node, polygon: list[Point]) -> bool:
+    """Проверить, попадает ли линия графа маршрута в зону видимости камеры."""
     del edge
     return segment_intersects_polygon(
         {"x": float(from_node.x), "y": float(from_node.y)},
@@ -168,6 +201,7 @@ def route_edge_intersects_camera_zone(edge, from_node, to_node, polygon: list[Po
 
 
 def polygon_centroid(points: list[Point]) -> Point:
+    """Вычислить центр полигона с безопасным запасным вариантом для вырожденных фигур."""
     if not points:
         return {"x": 0.0, "y": 0.0}
 

@@ -1,3 +1,11 @@
+"""Построение вероятного маршрута гостя по событиям, зонам камер и графу.
+
+Маршрут не является точным GPS-треком. Камера сообщает только факт: «гость был
+в зоне видимости этой камеры в указанное время». Сервис пересекает зону камеры
+с вручную размеченным графом маршрутов, выбирает виртуальные якорные точки на
+линиях графа и соединяет последовательные события кратчайшими путями.
+"""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -27,10 +35,14 @@ ANCHOR_EPSILON = 1e-6
 
 
 def _zone_points(zone: CameraVisibilityZone) -> list[dict[str, float]]:
+    """Привести JSON-точки зоны камеры к числовым координатам плана."""
+
     return [{"x": float(point["x"]), "y": float(point["y"])} for point in zone.points_json]
 
 
 def _edge_payload(edge: RouteEdge) -> dict[str, Any]:
+    """Сериализовать полную линию графа для отладочного ответа API."""
+
     return {
         "id": edge.id,
         "floor_id": edge.floor_id,
@@ -42,14 +54,20 @@ def _edge_payload(edge: RouteEdge) -> dict[str, Any]:
 
 
 def _node_payload(node: RouteNode) -> dict[str, Any]:
+    """Сериализовать точку графа для polyline маршрута."""
+
     return {"id": node.id, "x": node.x, "y": node.y}
 
 
 def _node_point(node: RouteNode) -> dict[str, float]:
+    """Получить координаты точки графа в формате геометрического сервиса."""
+
     return {"x": float(node.x), "y": float(node.y)}
 
 
 def _edge_short_payload(edge: RouteEdge) -> dict[str, Any]:
+    """Сериализовать линию графа в компактном формате маршрута."""
+
     return {
         "id": edge.id,
         "from_node_id": edge.from_node_id,
@@ -64,13 +82,23 @@ def _anchor_payload(
     to_node: RouteNode,
     polygon: list[dict[str, float]],
 ) -> dict[str, Any] | None:
+    """Построить виртуальную якорную точку на ребре внутри зоны камеры.
+
+    Камера не является точкой маршрута. Она видит область на плане. Поэтому
+    сервис ищет, где линия графа пересекает полигон зоны видимости, и выбирает
+    среднюю точку пересечения как место, где гость вероятнее всего находился на
+    графе в момент события камеры.
+    """
+
     p1 = _node_point(from_node)
     p2 = _node_point(to_node)
     intersection_points = segment_polygon_intersection_points(p1, p2, polygon)
     if not intersection_points:
         if not route_edge_intersects_camera_zone(edge, from_node, to_node, polygon):
             return None
-        # Fallback for degenerate geometry: snap the camera-zone center to the graph edge.
+        # Запасной вариант для вырожденной геометрии: если пересечение есть по
+        # проверке, но конкретные точки пересечения не удалось получить,
+        # привязываем центр зоны камеры к ближайшему месту на линии графа.
         anchor_point = project_point_to_segment(polygon_centroid(polygon), p1, p2)
     else:
         positions = [segment_position(point, p1, p2) for point in intersection_points]
@@ -93,6 +121,8 @@ def _anchor_payload(
 
 
 def _anchor_node_payload(anchor: dict[str, Any], event_index: int, role: str) -> dict[str, Any]:
+    """Преобразовать виртуальный якорь в точку polyline для frontend."""
+
     return {
         "id": f"event-{event_index}-{role}-anchor-{anchor['edge_id']}",
         "x": float(anchor["x"]),
@@ -107,6 +137,17 @@ def get_camera_route_candidates(
     floor_id: int,
     camera_id: int,
 ) -> dict[str, Any]:
+    """Найти линии и точки графа, которые попадают в зону видимости камеры.
+
+    Параметры:
+        session: сессия работы с базой данных.
+        floor_id: этаж, граф маршрутов которого используется.
+        camera_id: камера, для которой проверяется 4-точечная зона видимости.
+
+    Возвращает:
+        Словарь с зоной камеры, пересечёнными линиями графа, id возможных точек
+        и виртуальными якорными точками на пересечённых линиях.
+    """
     zone = session.exec(
         select(CameraVisibilityZone).where(
             CameraVisibilityZone.floor_id == floor_id,
@@ -169,6 +210,11 @@ def get_camera_route_candidates(
 
 
 def get_floor_camera_route_candidates(session: Session, floor_id: int) -> dict[str, Any]:
+    """Вернуть кандидаты маршрута для каждой активной камеры этажа.
+
+    Вспомогательная функция используется frontend-ом для проверки, корректно ли
+    зоны видимости камер связаны с графом маршрутов.
+    """
     cameras = session.exec(
         select(Camera)
         .where(Camera.floor_id == floor_id)
@@ -202,6 +248,14 @@ def _fetch_tracking_events(
     time_from: datetime | None,
     time_to: datetime | None,
 ) -> list[dict[str, Any]]:
+    """Загрузить события появления гостя из TrackingLog.
+
+    TrackingLog является основным источником для маршрута, потому что туда
+    попадают события внутренних камер: гость был замечен в зоне наблюдения
+    камеры в конкретный момент времени. Именно эти события образуют цепочку
+    Camera01 -> Camera02 -> Camera03, по которой строится направление маршрута.
+    """
+
     statement = (
         select(TrackingLog, Camera)
         .join(Camera, TrackingLog.camera_id == Camera.id)
@@ -239,6 +293,14 @@ def _fetch_access_events(
     time_from: datetime | None,
     time_to: datetime | None,
 ) -> list[dict[str, Any]]:
+    """Загрузить события гостя из AccessLog как запасной источник.
+
+    AccessLog отражает решения проходной: доступ разрешён или запрещён. Он не
+    настолько удобен для внутреннего маршрута, как TrackingLog, но полезен как
+    fallback: если offline/live tracking ещё не записал событий, маршрут можно
+    хотя бы привязать к камерам проходной, где гость был распознан.
+    """
+
     statement = (
         select(AccessLog, Camera)
         .join(Camera, AccessLog.camera_id == Camera.id)
@@ -270,6 +332,14 @@ def _fetch_access_events(
 
 
 def _collapse_consecutive_camera_duplicates(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Убрать подряд идущие события одной камеры.
+
+    Если человек несколько секунд стоит в зоне камеры, в журнале может появиться
+    несколько записей подряд с одним ``camera_id``. Для маршрута это не движение,
+    а всё ещё та же точка наблюдения, поэтому такие повторы сжимаются до одного
+    события.
+    """
+
     collapsed = []
     previous_camera_id = None
     for event in events:
@@ -281,6 +351,14 @@ def _collapse_consecutive_camera_duplicates(events: list[dict[str, Any]]) -> lis
 
 
 def _filter_low_confidence_events(events: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
+    """Отбросить события TrackingLog с низкой уверенностью распознавания.
+
+    Слишком слабые Re-ID совпадения могут портить маршрут: одно ложное событие
+    способно перебросить линию на другой конец этажа. Фильтр применяется только
+    к TrackingLog, потому что AccessLog часто создаётся по другой логике
+    контроля доступа и используется здесь как fallback.
+    """
+
     threshold = float(settings.guest_route_min_event_confidence)
     if threshold <= 0:
         return events, []
@@ -307,10 +385,19 @@ def _filter_low_confidence_events(events: list[dict[str, Any]]) -> tuple[list[di
 
 
 def _event_has_route_candidates(event: dict[str, Any]) -> bool:
+    """Проверить, можно ли связать событие камеры с графом маршрутов."""
+
     return bool(event.get("candidate_anchors") or event.get("candidate_node_ids"))
 
 
 def _route_anchors_for_candidate(candidate: dict[str, Any]) -> list[dict[str, Any]]:
+    """Выбрать якорные точки графа для события камеры.
+
+    Если зона камеры пересекла несколько рёбер, для маршрута обычно достаточно
+    основной точки, ближайшей к центру зоны. Если основной точки нет, возвращаем
+    все найденные якоря, чтобы алгоритм мог сам выбрать лучший переход.
+    """
+
     primary_anchor = candidate.get("primary_anchor")
     if primary_anchor:
         return [primary_anchor]
@@ -318,6 +405,14 @@ def _route_anchors_for_candidate(candidate: dict[str, Any]) -> list[dict[str, An
 
 
 def _keep_latest_event_per_camera(events: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
+    """Оставить последнее событие по каждой камере, если включён такой режим.
+
+    Для демонстрационного маршрута иногда важнее показать итоговую цепочку камер,
+    а не все повторные срабатывания. Например, если камера видела гостя в начале
+    и в конце движения, настройка помогает убрать шум и оставить наиболее
+    позднюю фиксацию камеры.
+    """
+
     if not settings.guest_route_keep_latest_event_per_camera or len(events) <= 1:
         return events, []
 
@@ -347,6 +442,14 @@ def _find_best_candidate_path(
     start_node_ids: list[int],
     end_node_ids: list[int],
 ):
+    """Найти кратчайший путь между двумя множествами обычных узлов графа.
+
+    Это запасной вариант для старой логики, когда у события камеры есть только
+    candidate_node_ids. Более точный путь строится через anchor points на рёбрах,
+    но обычные узлы сохраняются как fallback, чтобы маршрут не пропадал при
+    неполной геометрии зоны.
+    """
+
     best_path = None
     best_distance = float("inf")
     best_zero_path = None
@@ -371,6 +474,14 @@ def _find_best_candidate_path(
 
 
 def _anchor_exit_options(anchor: dict[str, Any]) -> list[tuple[int, float]]:
+    """Вернуть варианты выхода с виртуальной якорной точки на узлы ребра.
+
+    Якорь лежит не в вершине графа, а где-то посередине линии маршрута. Чтобы
+    запустить Дейкстру, нужно добраться от якоря до ближайшей вершины. Для
+    двустороннего ребра доступны оба направления, для одностороннего — только
+    направление движения ребра.
+    """
+
     if anchor.get("is_bidirectional"):
         return [
             (int(anchor["from_node_id"]), float(anchor["distance_from_from"])),
@@ -380,6 +491,8 @@ def _anchor_exit_options(anchor: dict[str, Any]) -> list[tuple[int, float]]:
 
 
 def _anchor_entry_options(anchor: dict[str, Any]) -> list[tuple[int, float]]:
+    """Вернуть варианты входа с узлов графа в виртуальную якорную точку."""
+
     if anchor.get("is_bidirectional"):
         return [
             (int(anchor["from_node_id"]), float(anchor["distance_from_from"])),
@@ -389,6 +502,8 @@ def _anchor_entry_options(anchor: dict[str, Any]) -> list[tuple[int, float]]:
 
 
 def _append_edge_payload(edge_payloads: list[dict[str, Any]], edge: RouteEdge | None) -> None:
+    """Добавить линию маршрута в ответ без подряд идущих дублей."""
+
     if not edge or edge.id is None:
         return
     if edge_payloads and edge_payloads[-1].get("id") == edge.id:
@@ -405,6 +520,14 @@ def _build_anchor_path(
     start_event_index: int,
     end_event_index: int,
 ) -> dict[str, Any] | None:
+    """Построить лучший путь между двумя виртуальными якорями.
+
+    Якорь — это точка на линии графа внутри зоны видимости камеры. Если два
+    события лежат на одном ребре, путь может быть прямым от якоря к якорю. Если
+    они на разных рёбрах, алгоритм пробует выйти с первого якоря в одну из
+    вершин, пройти Дейкстрой по графу и войти во второй якорь.
+    """
+
     start_edge = session.get(RouteEdge, start_anchor["edge_id"])
     end_edge = session.get(RouteEdge, end_anchor["edge_id"])
     if not start_edge or not end_edge:
@@ -471,6 +594,8 @@ def _find_best_anchor_path(
     start_event_index: int,
     end_event_index: int,
 ) -> dict[str, Any] | None:
+    """Выбрать самый короткий путь между наборами якорей двух камер."""
+
     best_path = None
     for start_anchor in start_anchors:
         for end_anchor in end_anchors:
@@ -495,6 +620,14 @@ def _transition_distance(
     from_event: dict[str, Any],
     to_event: dict[str, Any],
 ) -> float | None:
+    """Оценить, может ли человек физически перейти между двумя событиями.
+
+    Функция считает расстояние по графу и делит его на разницу timestamp. Если
+    получившаяся скорость слишком высокая или события слишком далеко разнесены
+    по времени, переход считается неправдоподобным. Это защищает маршрут от
+    случайных ложных срабатываний.
+    """
+
     dt = (to_event["timestamp"] - from_event["timestamp"]).total_seconds()
     if dt <= 0 or dt > settings.guest_route_max_event_gap_sec:
         return None
@@ -531,6 +664,15 @@ def _filter_plausible_event_chain(
     floor_id: int,
     events: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[str]]:
+    """Выбрать наиболее правдоподобную цепочку событий камер.
+
+    Если журнал содержит лишние или ложные события, простой порядок timestamp
+    может дать странный маршрут. Здесь используется динамический подход:
+    выбирается цепочка с максимальным числом связанных событий, минимальной
+    длиной переходов и большей суммарной уверенностью. События, которые не
+    укладываются в такую цепочку, отбрасываются с предупреждением.
+    """
+
     if len(events) <= 2:
         return events, []
 
@@ -610,6 +752,14 @@ def _append_route_segment(
     segment_nodes: list[dict[str, Any]],
     segment_edges: list[dict[str, Any]],
 ) -> None:
+    """Склеить найденный сегмент с общим polyline маршрута.
+
+    Маршрут между Camera01 и Camera02, затем между Camera02 и Camera03 может
+    иметь общую точку на стыке. Функция не добавляет подряд одинаковые точки и
+    линии, чтобы frontend получил чистую polyline без визуального утолщения и
+    повторов.
+    """
+
     for node in segment_nodes:
         if (
             route_nodes
@@ -632,6 +782,27 @@ def build_guest_probable_route(
     time_from: datetime | None = None,
     time_to: datetime | None = None,
 ) -> dict[str, Any]:
+    """Построить вероятный маршрут перемещения гостя за выбранный период.
+
+    Параметры:
+        session: сессия работы с базой данных.
+        guest_id: гость, события ``TrackingLog``/``AccessLog`` которого анализируются.
+        floor_id: этаж, камеры, зоны видимости и граф которого используются.
+        time_from: необязательное начало периода включительно.
+        time_to: необязательный конец периода включительно.
+
+    Возвращает:
+        Данные маршрута для API: упорядоченные события, точки polyline, линии
+        маршрута, участвующие зоны камер, суммарная длина и предупреждения.
+
+    Алгоритм:
+        1. Загружает события ``TrackingLog`` и при необходимости использует ``AccessLog``.
+        2. Отбрасывает низкодостоверные и повторяющиеся события камер.
+        3. Преобразует каждое событие камеры в кандидаты графа через зону видимости.
+        4. Соединяет соседние события кратчайшими путями с учётом якорных точек.
+        5. Возвращает предупреждения вместо падения всего расчёта, если участок
+           отсутствует или выглядит подозрительно.
+    """
     guest = session.get(Guest, guest_id)
     if not guest:
         raise ValueError("Гость не найден")

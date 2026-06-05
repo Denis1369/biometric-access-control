@@ -1,3 +1,15 @@
+"""WebSocket endpoint-ы для live-обновлений интерфейса.
+
+В проекте есть операции, которые не удобно обновлять обычным polling-ом:
+живой кадр камеры, прогресс анализа видео, прогресс построения маршрута гостя
+и свежие события журнала проходов. Этот модуль даёт frontend-у постоянные
+подписки, через которые backend отправляет данные сразу после изменения.
+
+Так как стандартный OAuth2 Bearer-заголовок не всегда удобно передавать при
+создании WebSocket из браузера, token передаётся в query-параметре. Перед
+подключением каждый endpoint вручную проверяет пользователя и его permissions.
+"""
+
 import asyncio
 import logging
 
@@ -34,6 +46,21 @@ logger = logging.getLogger(__name__)
 
 
 def _get_user_from_token(token: str | None) -> User | None:
+    """Получить активного пользователя из JWT-токена WebSocket-подключения.
+
+    WebSocket endpoint-ы не используют обычную FastAPI dependency `get_current_user`,
+    потому что WebSocket-запрос живёт иначе, чем HTTP-запрос. Поэтому здесь
+    вручную декодируется subject токена, открывается короткая сессия БД и
+    проверяется, что пользователь существует и не деактивирован.
+
+    Параметры:
+        token: JWT access token из query-параметра `token`.
+
+    Возвращает:
+        Модель активного пользователя или None, если токен отсутствует,
+        недействителен, пользователь не найден или отключён.
+    """
+
     if not token:
         return None
 
@@ -49,6 +76,25 @@ def _get_user_from_token(token: str | None) -> User | None:
 
 
 async def _reject_unauthorized(websocket: WebSocket, *allowed_permissions: str) -> bool:
+    """Проверить доступ к WebSocket и закрыть соединение при отказе.
+
+    Функция используется в начале каждого WebSocket endpoint-а. Она достаёт
+    token из query-параметров, определяет роль пользователя, получает набор
+    разрешений и проверяет, есть ли хотя бы одно из разрешений, подходящих для
+    подписки. При отказе соединение закрывается кодом 1008, который означает
+    нарушение политики доступа.
+
+    Параметры:
+        websocket: Подключение, которое пытается открыть frontend.
+        allowed_permissions: Разрешения, любое из которых даёт право на
+            подписку. Например, журнал проходов могут видеть разные роли с
+            разным уровнем доступа.
+
+    Возвращает:
+        True, если соединение уже отклонено и endpoint должен завершиться;
+        False, если пользователь допущен.
+    """
+
     token = websocket.query_params.get("token")
     user = _get_user_from_token(token)
     permissions = get_permissions_for_role(user.role) if user else frozenset()
@@ -59,6 +105,22 @@ async def _reject_unauthorized(websocket: WebSocket, *allowed_permissions: str) 
 
 
 async def _keep_subscription_alive(websocket: WebSocket, topic: str, initial_payload: dict) -> None:
+    """Открыть topic-подписку и держать WebSocket активным.
+
+    Большинство подписок устроены одинаково: принять соединение, привязать его
+    к topic в topic_ws_manager, отправить начальный снимок состояния и дальше
+    ждать любые входящие сообщения от клиента. Смысл входящих сообщений здесь
+    не важен: они нужны, чтобы соединение не завершалось и чтобы мы могли
+    корректно поймать отключение вкладки.
+
+    Параметры:
+        websocket: WebSocket-соединение пользователя.
+        topic: Логический канал рассылки, например конкретная задача анализа
+            видео или общий журнал проходов.
+        initial_payload: Начальное состояние, которое клиент получает сразу
+            после подключения, ещё до следующих изменений.
+    """
+
     await websocket.accept()
     topic_ws_manager.connect(topic, websocket)
     try:
@@ -79,6 +141,19 @@ async def _keep_subscription_alive(websocket: WebSocket, topic: str, initial_pay
 
 @router.websocket("/ws/video/{camera_id}")
 async def video_endpoint(websocket: WebSocket, camera_id: int):
+    """Передавать live-кадры выбранной камеры в браузер.
+
+    Endpoint используется компонентом просмотра камеры. Он не отправляет JSON:
+    здесь по WebSocket идут JPEG-байты последнего кадра, чтобы canvas/video-view
+    на frontend мог быстро перерисовываться. При подключении включается
+    demo-recognition для камеры, а при отключении обязательно выключается, чтобы
+    лишняя обработка не продолжалась после закрытия вкладки.
+
+    Параметры:
+        websocket: Подключение браузера.
+        camera_id: Идентификатор камеры, кадры которой нужно отправлять.
+    """
+
     if await _reject_unauthorized(websocket, CAMERA_SNAPSHOT_READ):
         return
 
@@ -116,6 +191,18 @@ async def video_endpoint(websocket: WebSocket, camera_id: int):
 
 @router.websocket("/ws/guest-route-analysis-jobs/{job_id}")
 async def guest_route_analysis_job_endpoint(websocket: WebSocket, job_id: int):
+    """Подписать frontend на статус offline job маршрута гостя.
+
+    После запуска анализа видео по камерам этажа модальное окно гостя открывает
+    эту подписку. Backend отправляет начальный снимок задания, а сервис анализа
+    позже публикует новые payload-ы через topic_ws_manager. Так оператор видит
+    прогресс без ручного обновления страницы.
+
+    Параметры:
+        websocket: Подключение браузера.
+        job_id: Идентификатор GuestRouteAnalysisJob.
+    """
+
     if await _reject_unauthorized(websocket, GUEST_ROUTES_ANALYZE_VIDEO):
         return
 
@@ -135,6 +222,18 @@ async def guest_route_analysis_job_endpoint(websocket: WebSocket, job_id: int):
 
 @router.websocket("/ws/video-analysis/jobs/{job_id}")
 async def video_analysis_job_endpoint(websocket: WebSocket, job_id: int):
+    """Подписать frontend на прогресс обычной задачи анализа видео.
+
+    Endpoint похож на guest_route_analysis_job_endpoint, но работает с
+    VideoAnalysisJob. Он нужен странице «Анализ видео», где пользователь
+    загружает ролик и наблюдает, как меняются analyzed_frames, статус и
+    количество найденных событий.
+
+    Параметры:
+        websocket: Подключение браузера.
+        job_id: Идентификатор VideoAnalysisJob.
+    """
+
     if await _reject_unauthorized(websocket, VIDEO_ANALYSIS_READ):
         return
 
@@ -154,6 +253,16 @@ async def video_analysis_job_endpoint(websocket: WebSocket, job_id: int):
 
 @router.websocket("/ws/access-logs")
 async def access_logs_endpoint(websocket: WebSocket):
+    """Отправлять новые события журнала проходов в реальном времени.
+
+    При открытии подписки клиент сначала получает snapshot последних событий,
+    чтобы интерфейс был заполнен сразу. После этого access_log_service публикует
+    новые записи в общий topic, и список на проходной обновляется без polling-а.
+
+    Параметры:
+        websocket: Подключение браузера к журналу проходов.
+    """
+
     if await _reject_unauthorized(websocket, ACCESS_LOGS_READ, ACCESS_LOGS_READ_RECENT):
         return
 

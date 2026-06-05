@@ -1,3 +1,11 @@
+"""Состояние фонового задания офлайн-анализа маршрута гостя.
+
+Когда оператор нажимает «Проанализировать видео и построить», backend не может
+обработать несколько MP4-файлов внутри одного HTTP-запроса. Поэтому создаётся
+задание, его прогресс сохраняется в этой таблице, а frontend отслеживает статус
+через WebSocket.
+"""
+
 from datetime import datetime
 
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, String
@@ -6,6 +14,14 @@ from sqlmodel import Field, SQLModel
 
 
 class GuestRouteAnalysisJob(SQLModel, table=True):
+    """Одна попытка найти выбранного гостя на file-камерах этажа.
+
+    Запись хранит период анализа, количество обработанных камер, число событий,
+    записанных в ``TrackingLog``, предупреждения и ошибку. Благодаря этому можно
+    показать оператору, что именно произошло: обработка ещё идёт, завершилась
+    успешно, не нашла гостя или упала из-за проблем с видео/моделью.
+    """
+
     __tablename__ = "guest_route_analysis_jobs"
 
     id: int | None = Field(default=None, primary_key=True)

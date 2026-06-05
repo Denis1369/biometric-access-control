@@ -1,3 +1,11 @@
+"""Сервис ручного графа маршрутов.
+
+Оператор рисует технические точки и линии маршрута поверх плана этажа. Модуль
+проверяет изменения графа и запускает алгоритм Дейкстры для поиска кратчайшего
+пути между двумя точками. Зоны камер и маршруты гостей переиспользуют этот граф,
+а не считают камеры самостоятельными точками маршрута.
+"""
+
 from __future__ import annotations
 
 import heapq
@@ -14,21 +22,35 @@ from app.models.route_nodes import RouteNode
 
 
 class RouteGraphError(ValueError):
-    """Domain-level error that API handlers convert to HTTP responses."""
+    """Доменная ошибка графа, которую API преобразует в HTTP-ответ.
+
+    Сервис не зависит от FastAPI и не выбрасывает HTTPException напрямую. Так
+    его можно использовать из разных мест backend-а, а router сам решает, какой
+    статус ответа вернуть пользователю.
+    """
 
 
 class RouteNotFoundError(RouteGraphError):
-    """Raised when the graph is valid, but no path connects the requested nodes."""
+    """Ошибка ситуации, когда граф корректен, но путь между точками не найден."""
 
 
 @dataclass(frozen=True)
 class RoutePath:
+    """Результат кратчайшего пути, найденного алгоритмом Дейкстры.
+
+    Атрибуты:
+        nodes: упорядоченные точки графа от начала до конца.
+        edges: упорядоченные линии графа между точками.
+        distance: суммарный вес пути в пикселях плана этажа.
+    """
+
     nodes: list[RouteNode]
     edges: list[RouteEdge]
     distance: float
 
 
 def ensure_floor_exists(session: Session, floor_id: int) -> Floor:
+    """Загрузить этаж или выбросить доменную ошибку для API-обработчиков."""
     floor = session.get(Floor, floor_id)
     if not floor:
         raise RouteGraphError("Этаж не найден")
@@ -36,6 +58,7 @@ def ensure_floor_exists(session: Session, floor_id: int) -> Floor:
 
 
 def get_floor_graph(session: Session, floor_id: int) -> tuple[list[RouteNode], list[RouteEdge]]:
+    """Вернуть все точки и линии маршрута этажа в стабильном порядке."""
     ensure_floor_exists(session, floor_id)
     nodes = session.exec(
         select(RouteNode)
@@ -51,6 +74,14 @@ def get_floor_graph(session: Session, floor_id: int) -> tuple[list[RouteNode], l
 
 
 def create_route_node(session: Session, floor_id: int, x: float, y: float) -> RouteNode:
+    """Создать техническую точку маршрута на плане этажа.
+
+    Параметры:
+        session: сессия работы с базой данных.
+        floor_id: этаж, на котором ставится точка.
+        x: координата X в пикселях исходного изображения плана.
+        y: координата Y в пикселях исходного изображения плана.
+    """
     ensure_floor_exists(session, floor_id)
     node = RouteNode(floor_id=floor_id, x=x, y=y)
     session.add(node)
@@ -60,6 +91,7 @@ def create_route_node(session: Session, floor_id: int, x: float, y: float) -> Ro
 
 
 def update_route_node(session: Session, node_id: int, x: float | None, y: float | None) -> RouteNode:
+    """Передвинуть точку маршрута и пересчитать веса связанных линий."""
     node = session.get(RouteNode, node_id)
     if not node:
         raise RouteGraphError("Точка маршрута не найдена")
@@ -70,7 +102,8 @@ def update_route_node(session: Session, node_id: int, x: float | None, y: float 
         node.y = y
     node.updated_at = datetime.now()
 
-    # Moving a node changes distances for every attached edge.
+    # При перемещении точки меняется геометрическая длина всех линий,
+    # подключённых к этой точке, поэтому веса нужно пересчитать сразу.
     attached_edges = session.exec(
         select(RouteEdge).where(
             or_(
@@ -94,6 +127,7 @@ def update_route_node(session: Session, node_id: int, x: float | None, y: float 
 
 
 def delete_route_node(session: Session, node_id: int) -> None:
+    """Удалить точку маршрута вместе со всеми связанными с ней линиями."""
     node = session.get(RouteNode, node_id)
     if not node:
         raise RouteGraphError("Точка маршрута не найдена")
@@ -113,6 +147,7 @@ def delete_route_node(session: Session, node_id: int) -> None:
 
 
 def calculate_weight(from_node: RouteNode, to_node: RouteNode) -> float:
+    """Рассчитать евклидов вес линии между двумя точками плана."""
     return math.hypot(to_node.x - from_node.x, to_node.y - from_node.y)
 
 
@@ -122,6 +157,7 @@ def find_duplicate_edge(
     from_node_id: int,
     to_node_id: int,
 ) -> RouteEdge | None:
+    """Найти существующую линию независимо от направления A-B или B-A."""
     return session.exec(
         select(RouteEdge).where(
             RouteEdge.floor_id == floor_id,
@@ -146,6 +182,7 @@ def create_route_edge(
     to_node_id: int,
     is_bidirectional: bool = True,
 ) -> RouteEdge:
+    """Создать линию графа между двумя точками и запретить некорректные дубли."""
     ensure_floor_exists(session, floor_id)
     if from_node_id == to_node_id:
         raise RouteGraphError("Нельзя создать линию от точки к самой себе")
@@ -175,6 +212,7 @@ def create_route_edge(
 
 
 def delete_route_edge(session: Session, edge_id: int) -> None:
+    """Удалить одну линию маршрута по id."""
     edge = session.get(RouteEdge, edge_id)
     if not edge:
         raise RouteGraphError("Линия маршрута не найдена")
@@ -183,6 +221,7 @@ def delete_route_edge(session: Session, edge_id: int) -> None:
 
 
 def clear_floor_graph(session: Session, floor_id: int) -> None:
+    """Удалить все точки и линии маршрута на этаже после подтверждения пользователя."""
     ensure_floor_exists(session, floor_id)
     edges = session.exec(select(RouteEdge).where(RouteEdge.floor_id == floor_id)).all()
     nodes = session.exec(select(RouteNode).where(RouteNode.floor_id == floor_id)).all()
@@ -199,6 +238,21 @@ def find_shortest_path(
     start_node_id: int,
     end_node_id: int,
 ) -> RoutePath:
+    """Найти кратчайший путь между двумя точками маршрута алгоритмом Дейкстры.
+
+    Параметры:
+        session: сессия работы с базой данных.
+        floor_id: этаж, граф которого используется.
+        start_node_id: id начальной точки маршрута.
+        end_node_id: id конечной точки маршрута.
+
+    Возвращает:
+        Упорядоченные точки, упорядоченные линии и общая длина в пикселях.
+
+    Ошибки:
+        RouteGraphError: если этаж или выбранные точки не существуют.
+        RouteNotFoundError: если точки есть, но путь между ними отсутствует.
+    """
     ensure_floor_exists(session, floor_id)
     if start_node_id == end_node_id:
         node = session.get(RouteNode, start_node_id)

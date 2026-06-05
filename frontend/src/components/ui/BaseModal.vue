@@ -33,6 +33,13 @@
 import { computed } from 'vue'
 import BaseIconButton from './BaseIconButton.vue'
 
+/**
+ * Базовое модальное окно приложения.
+ *
+ * Компонент выносит общий каркас модалок: затемнение фона, заголовок, кнопку
+ * закрытия, область тела и footer. Модалка телепортируется в `body`, чтобы её
+ * не ломали overflow и z-index родительских карточек или страниц.
+ */
 const props = defineProps({
   modelValue: {
     type: Boolean,
@@ -57,11 +64,24 @@ const emit = defineEmits(['update:modelValue', 'close'])
 
 const titleId = computed(() => `modal-title-${props.title.toLowerCase().replace(/[^a-zа-я0-9]+/giu, '-')}`)
 
+/**
+ * Закрывает модальное окно и сообщает родителю о закрытии.
+ *
+ * Событие `update:modelValue` нужно для `v-model`, а отдельное `close` даёт
+ * родительской странице возможность очистить форму или остановить фоновые
+ * операции после закрытия.
+ */
 function close() {
   emit('update:modelValue', false)
   emit('close')
 }
 
+/**
+ * Закрывает модалку по клику на фон, если это разрешено props-ом.
+ *
+ * Для опасных действий родитель может поставить `closeOnBackdrop=false`, чтобы
+ * случайный клик мимо формы не сбросил введённые данные.
+ */
 function handleBackdropClick() {
   if (props.closeOnBackdrop) close()
 }

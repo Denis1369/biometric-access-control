@@ -1,3 +1,11 @@
+"""API этажей и изображений планов помещений.
+
+Этаж связывает здание с конкретным планом, камерами, зонами видимости и графом
+маршрутов. В этом проекте изображение плана хранится в базе данных как бинарные
+данные, чтобы frontend мог получать его через API и сразу рисовать поверх него
+SVG-разметку без отдельного файлового сервера.
+"""
+
 from datetime import datetime
 from typing import List
 
@@ -14,6 +22,8 @@ from app.models.floors import Floor
 router = APIRouter(prefix="/api/floors", tags=["Этажи"])
 
 class FloorRead(SQLModel):
+    """Краткое представление этажа для списков и выпадающих меню."""
+
     id: int
     building_id: int
     name: str
@@ -24,10 +34,13 @@ class FloorRead(SQLModel):
 
 
 class FloorWithBuildingRead(FloorRead):
+    """Карточка этажа с названием здания, к которому он относится."""
+
     building_name: str | None = None
 
 
 def _normalize_required_name(value: str, field_name: str) -> str:
+    """Очистить обязательное название этажа и запретить пустую строку."""
     normalized = value.strip()
     if not normalized:
         raise HTTPException(
@@ -48,6 +61,12 @@ def get_floors(
     building_id: int | None = None,
     session: Session = Depends(get_session),
 ):
+    """Вернуть этажи, опционально только для выбранного здания.
+
+    Страница плана сначала выбирает здание, затем получает список его этажей.
+    Флаг `has_plan` позволяет интерфейсу сразу показать, загружено ли изображение
+    плана и можно ли размещать камеры/граф маршрутов.
+    """
     statement = select(Floor)
     if building_id is not None:
         statement = statement.where(Floor.building_id == building_id)
@@ -76,6 +95,7 @@ def get_floors(
     dependencies=[Depends(require_permissions(FLOORS_READ))],
 )
 def get_floor(floor_id: int, session: Session = Depends(get_session)):
+    """Вернуть подробную информацию об этаже вместе с названием здания."""
     statement = (
         select(Floor, Building)
         .join(Building, Floor.building_id == Building.id)
@@ -108,6 +128,12 @@ def get_floor(floor_id: int, session: Session = Depends(get_session)):
     dependencies=[Depends(require_permissions(FLOOR_PLANS_READ))],
 )
 def get_floor_plan(floor_id: int, session: Session = Depends(get_session)):
+    """Вернуть бинарное изображение плана этажа.
+
+    Frontend использует этот endpoint как `src` для тега `img`. Если план ещё не
+    загружен, backend возвращает 404, чтобы редактор плана показал понятное
+    состояние «план отсутствует», а не пустую картинку.
+    """
     floor = session.get(Floor, floor_id)
     if not floor:
         raise HTTPException(
@@ -138,6 +164,13 @@ async def create_floor(
     plan: UploadFile | None = File(None),
     session: Session = Depends(get_session),
 ):
+    """Создать этаж и при необходимости сразу загрузить изображение плана.
+
+    Запрос multipart нужен потому, что кроме номера и названия этажа может
+    передаваться файл изображения. Backend проверяет существование здания и
+    отклоняет пустой файл, чтобы на плане не появилась нерабочая запись без
+    реального изображения.
+    """
     building = session.get(Building, building_id)
     if not building:
         raise HTTPException(
@@ -196,6 +229,13 @@ async def update_floor(
     remove_plan: bool = Form(False),
     session: Session = Depends(get_session),
 ):
+    """Обновить данные этажа, заменить или удалить изображение плана.
+
+    Если пользователь загружает новый план, координатная разметка камер и графа
+    может потребовать ручной проверки: координаты хранятся относительно исходного
+    изображения. Сам endpoint только сохраняет новый файл и обновляет время
+    изменения этажа.
+    """
     floor = session.get(Floor, floor_id)
     if not floor:
         raise HTTPException(

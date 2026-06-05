@@ -225,6 +225,14 @@ import { computed, ref, watch } from 'vue'
 import { floorsApi } from '../../api/floors'
 import { formatPolygonPoints, polygonCentroid } from '../../services/geometry'
 
+/**
+ * Модальное окно построения маршрута гостя.
+ *
+ * Компонент намеренно живёт в разделе гостей: пользователь выбирает конкретного
+ * гостя и строит его маршрут за день/период. Внутри есть два сценария:
+ * мгновенно построить маршрут по уже записанному журналу или запустить тяжёлый
+ * offline-анализ file-видео камер, дождаться job и показать полученный маршрут.
+ */
 const props = defineProps({
   open: {
     type: Boolean,
@@ -284,6 +292,13 @@ const props = defineProps({
   },
 })
 
+/**
+ * События оставляют бизнес-логику на родительской странице Guests.vue.
+ *
+ * Модалка отвечает за отображение формы, карты и результата, но не решает сама,
+ * можно ли запускать анализ, как показывать ошибки и когда обновлять список
+ * гостей. Поэтому действия пользователя пробрасываются наружу через emit.
+ */
 const emit = defineEmits([
   'update:open',
   'update:floorId',
@@ -297,6 +312,13 @@ const emit = defineEmits([
   'start-analysis',
 ])
 
+/**
+ * Ссылка на изображение плана и его натуральный размер.
+ *
+ * SVG-слой маршрута использует viewBox исходного изображения плана. Если взять
+ * размер картинки на экране, стрелки и зоны камер съедут при изменении масштаба
+ * модального окна.
+ */
 const routePlanImage = ref(null)
 const routePlanVersion = ref(Date.now())
 const routePlanMetrics = ref({
@@ -308,6 +330,12 @@ const selectedFloor = computed(() =>
   props.floorOptions.find(floor => String(floor.id) === String(props.floorId)) || null
 )
 
+/**
+ * URL плана этажа с cache-busting параметром.
+ *
+ * Версия обновляется при открытии модалки, смене этажа или результата, чтобы
+ * браузер не показывал старую картинку после изменения плана.
+ */
 const routePlanUrl = computed(() => {
   if (!selectedFloor.value?.has_plan || !props.floorId) return ''
   const baseUrl = floorsApi.getFloorPlanUrl(props.floorId)
@@ -315,25 +343,38 @@ const routePlanUrl = computed(() => {
   return `${baseUrl}${separator}v=${routePlanVersion.value}`
 })
 
+/** ViewBox SVG-слоя в координатах оригинального изображения плана. */
 const routePlanViewBox = computed(() => {
   const { naturalWidth, naturalHeight } = routePlanMetrics.value
   return `0 0 ${naturalWidth || 1} ${naturalHeight || 1}`
 })
 
+/** Polyline вероятного маршрута, которую backend уже вернул в координатах плана. */
 const routePolyline = computed(() =>
   (props.result?.route_nodes || []).map(node => `${node.x},${node.y}`).join(' ')
 )
 
+/** Зоны камер, участвующих в построенном маршруте. */
 const routeCameraZones = computed(() => props.result?.camera_zones || [])
+/** События камер в порядке timestamp: именно они задают направление движения. */
 const routeEvents = computed(() => props.result?.events || [])
+/** Предупреждения backend-а: нет зоны, зона не пересекает граф, путь не найден и т.д. */
 const routeWarnings = computed(() => props.result?.warnings || [])
 const jobWarnings = computed(() => {
   const warnings = props.job?.warnings || []
   const routeWarningSet = new Set(routeWarnings.value)
   return warnings.filter(warning => !routeWarningSet.has(warning))
 })
+/** Размер маркера события масштабируется от ширины плана, чтобы номер был читаемым. */
 const routeMarkerRadius = computed(() => Math.max(9, routePlanMetrics.value.naturalWidth / 115))
 
+/**
+ * Маркеры событий на карте.
+ *
+ * Если backend вернул `route_anchor`, номер события ставится прямо на точку
+ * пересечения зоны камеры с графом маршрута. Если якоря нет, используется центр
+ * полигона зоны камеры как более грубая, но понятная fallback-позиция.
+ */
 const routeEventMarkers = computed(() =>
   routeEvents.value
     .map((event, index) => {
@@ -357,6 +398,12 @@ const routeEventMarkers = computed(() =>
     .filter(Boolean)
 )
 
+/**
+ * При смене входных данных сбрасываем размеры плана.
+ *
+ * Это заставляет SVG пересчитать viewBox после загрузки нового изображения,
+ * иначе старая ширина/высота может остаться от предыдущего этажа.
+ */
 watch(
   () => [props.open, props.floorId, props.result],
   () => {
@@ -365,21 +412,25 @@ watch(
   }
 )
 
+/** Закрыть модальное окно и сообщить родителю, что сценарий завершён. */
 function close() {
   emit('update:open', false)
   emit('close')
 }
 
+/** Передать выбранный этаж родителю, чтобы он мог загрузить план и маршрут. */
 function handleFloorChange(event) {
   emit('update:floorId', event.target.value)
   emit('floor-change')
 }
 
+/** Собрать ФИО гостя для поясняющего текста в шапке модалки. */
 function formatGuestName(guest) {
   if (!guest) return ''
   return [guest.last_name, guest.first_name, guest.middle_name].filter(Boolean).join(' ')
 }
 
+/** Перевести технический статус backend job в подпись для оператора. */
 function formatRouteJobStatus(status) {
   const labels = {
     queued: 'в очереди',
@@ -390,6 +441,7 @@ function formatRouteJobStatus(status) {
   return labels[status] || status
 }
 
+/** Отформатировать timestamp события камеры в привычный русский формат даты/времени. */
 function formatTimestamp(value) {
   if (!value) return '—'
   const date = new Date(value)
@@ -397,6 +449,7 @@ function formatTimestamp(value) {
   return date.toLocaleString('ru-RU')
 }
 
+/** Запомнить натуральный размер плана после загрузки изображения. */
 function onRoutePlanImageLoad() {
   if (!routePlanImage.value) return
   routePlanMetrics.value = {

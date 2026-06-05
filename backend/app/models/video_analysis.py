@@ -1,9 +1,25 @@
+"""Модели задач анализа загруженных видео и найденных событий.
+
+Эти таблицы обслуживают страницу «Анализ видео», где пользователь загружает
+один ролик, а backend обрабатывает его в фоне. VideoAnalysisJob хранит состояние
+долгой операции, а VideoAnalysisEvent — отдельные моменты, где система нашла
+человека и приняла решение о распознавании.
+"""
+
 from datetime import datetime
 
 from sqlmodel import Field, SQLModel
 
 
 class VideoAnalysisJob(SQLModel, table=True):
+    """Фоновая задача обработки одного загруженного видеофайла.
+
+    source_path указывает на файл в storage, status показывает жизненный цикл
+    queued/processing/completed/failed, analyzed_frames нужен для прогресса,
+    granted_count и denied_count показывают итоговые решения системы, а
+    error_message хранит понятную причину сбоя для интерфейса.
+    """
+
     __tablename__ = "video_analysis_jobs"
 
     id: int | None = Field(default=None, primary_key=True)
@@ -24,6 +40,15 @@ class VideoAnalysisJob(SQLModel, table=True):
 
 
 class VideoAnalysisEvent(SQLModel, table=True):
+    """Одно событие, найденное в процессе анализа видео.
+
+    frame_index и timestamp_sec связывают событие с конкретным моментом ролика.
+    person_type/person_id/person_name описывают распознанного человека, status и
+    decision показывают решение системы, confidence/distance помогают оценить
+    качество совпадения, а preview_path ведёт к кадру-превью для визуальной
+    проверки результата.
+    """
+
     __tablename__ = "video_analysis_events"
 
     id: int | None = Field(default=None, primary_key=True)

@@ -1,3 +1,11 @@
+"""API вероятного маршрута гостя по журналам и зонам камер.
+
+Этот router не анализирует видео напрямую. Он берёт уже записанные события
+гостя из журналов, смотрит, какие камеры участвовали в выбранный период, связывает
+эти камеры с зонами видимости и просит сервис построить вероятный путь по
+ручному графу маршрутов этажа.
+"""
+
 from datetime import datetime
 from typing import Any
 
@@ -16,6 +24,8 @@ from app.services.guest_route_service import (
 router = APIRouter(prefix="/api", tags=["Вероятные маршруты гостей"])
 
 class GuestProbableRouteRead(SQLModel):
+    """Ответ с готовым вероятным маршрутом гостя для модального окна."""
+
     guest_id: int
     floor_id: int
     events: list[dict[str, Any]]
@@ -27,6 +37,8 @@ class GuestProbableRouteRead(SQLModel):
 
 
 class CameraRouteCandidatesRead(SQLModel):
+    """Отладочный ответ: какие участки графа попадают в зоны камер этажа."""
+
     floor_id: int
     cameras: list[dict[str, Any]]
     warnings: list[str]
@@ -42,6 +54,12 @@ def get_camera_route_candidates_for_floor(
     floor_id: int,
     session: Session = Depends(get_session),
 ):
+    """Показать связь зон камер с графом маршрутов.
+
+    Endpoint нужен технику и разработчику для проверки разметки. Если зона камеры
+    не пересекает ни одну линию графа, маршрут по этой камере построить нельзя,
+    поэтому API возвращает warnings, которые frontend показывает в интерфейсе.
+    """
     floor = session.get(Floor, floor_id)
     if not floor:
         raise HTTPException(
@@ -65,6 +83,13 @@ def get_guest_probable_route(
     time_to: datetime | None = Query(default=None),
     session: Session = Depends(get_session),
 ):
+    """Построить маршрут гостя по уже записанным событиям камер.
+
+    Пользователь выбирает гостя, этаж и период времени. Backend фильтрует события
+    этого гостя, оставляет камеры выбранного этажа и строит путь по графу через
+    зоны видимости камер. Если данных недостаточно, возвращается понятная ошибка
+    или предупреждения, а не технический stack trace.
+    """
     floor = session.get(Floor, floor_id)
     if not floor:
         raise HTTPException(

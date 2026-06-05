@@ -1,3 +1,11 @@
+"""API справочника должностей сотрудников.
+
+Должности используются в карточках сотрудников и помогают HR-разделу хранить
+более структурированные данные. Справочник поддерживает архивирование через
+`is_active`, чтобы старые должности не исчезали из истории, но не мешали при
+создании новых карточек.
+"""
+
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -12,6 +20,8 @@ from app.models.job_positions import JobPosition
 router = APIRouter(prefix="/api/job-positions", tags=["Должности"])
 
 class JobPositionCreate(SQLModel):
+    """Данные для создания новой должности."""
+
     name: str = Field(min_length=1)
     is_active: bool = True
     sort_order: int = 100
@@ -19,6 +29,13 @@ class JobPositionCreate(SQLModel):
 
 
 class JobPositionUpdate(SQLModel):
+    """Частичное обновление должности.
+
+    Можно изменить название, активность, порядок сортировки или привязку к
+    отделу. Все поля необязательные, потому что форма редактирования может
+    отправлять только изменённые значения.
+    """
+
     name: str | None = None
     is_active: bool | None = None
     sort_order: int | None = None
@@ -26,6 +43,11 @@ class JobPositionUpdate(SQLModel):
 
 
 def _normalize_required_name(value: str) -> str:
+    """Очистить название должности и запретить пустую строку.
+
+    Пустая должность плохо выглядит в карточке сотрудника и аналитике, поэтому
+    backend не полагается только на frontend-валидацию и повторно проверяет поле.
+    """
     normalized = value.strip()
     if not normalized:
         raise HTTPException(status_code=400, detail="Название должности не может быть пустым")
@@ -37,6 +59,12 @@ def _normalize_required_name(value: str) -> str:
     dependencies=[Depends(require_permissions(JOB_POSITIONS_READ))],
 )
 def get_job_positions(only_active: bool = False, session: Session = Depends(get_session)):
+    """Вернуть список должностей для форм сотрудников.
+
+    Если `only_active=True`, API отдаёт только должности, которые можно выбирать
+    при создании или редактировании сотрудника. Полный список нужен для
+    администрирования справочника, где архивные должности тоже видны.
+    """
     query = select(JobPosition)
     if only_active:
         query = query.where(JobPosition.is_active.is_(True))
@@ -54,6 +82,12 @@ def create_job_position(
     position_data: JobPositionCreate,
     session: Session = Depends(get_session),
 ):
+    """Создать должность в справочнике.
+
+    Super-admin или HR задаёт название, порядок сортировки и при необходимости
+    отдел. После сохранения должность сразу становится доступной в форме
+    сотрудника, если `is_active` не выключен.
+    """
     position = JobPosition(
         name=_normalize_required_name(position_data.name),
         is_active=position_data.is_active,
@@ -76,6 +110,12 @@ def update_job_position(
     position_data: JobPositionUpdate,
     session: Session = Depends(get_session),
 ):
+    """Обновить существующую должность.
+
+    Функция сначала проверяет, что запись существует, затем применяет только
+    переданные поля. Такой PATCH-подход уменьшает риск случайно сбросить
+    остальные настройки должности.
+    """
     position = session.get(JobPosition, position_id)
     if not position:
         raise HTTPException(status_code=404, detail="Должность не найдена")

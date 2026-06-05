@@ -149,6 +149,14 @@ import { useUi } from '../services/ui'
 
 defineOptions({ name: 'DepartmentsPage' })
 
+/**
+ * Страница отделов и должностей.
+ *
+ * Этот справочник нужен не только для красивых карточек сотрудников. Рабочее
+ * время отдела используется аналитикой, чтобы определить опоздание, отсутствие
+ * или ранний уход сотрудника. Поэтому вместе с названием отдела хранятся
+ * интервалы рабочего дня и обеда.
+ */
 const auth = useAuth()
 const ui = useUi()
 const canManageDepartments = computed(() => auth.hasPermission(PERMISSIONS.DEPARTMENTS_WRITE))

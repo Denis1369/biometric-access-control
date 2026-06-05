@@ -1,3 +1,10 @@
+"""API гостевых пропусков.
+
+Модуль создаёт временные пропуска гостей, сохраняет образцы лица, при
+необходимости формирует Re-ID вектор полного роста и позволяет оператору
+аннулировать пропуск без удаления истории событий.
+"""
+
 from datetime import datetime
 import logging
 from typing import List
@@ -22,6 +29,13 @@ router = APIRouter(prefix="/api/guests", tags=["Гости"])
 logger = logging.getLogger(__name__)
 
 def _normalize_required_name(value: str, field_name: str) -> str:
+    """Проверить обязательное текстовое поле гостя и убрать лишние пробелы.
+
+    ФИО гостя вводит оператор КПП вручную. Пустая фамилия или имя не должны
+    попадать в базу, потому что дальше эти данные отображаются в пропуске,
+    журнале событий и выборе гостя для построения маршрута.
+    """
+
     normalized = value.strip()
     if not normalized:
         raise HTTPException(status_code=400, detail=f"Поле {field_name} не может быть пустым")
@@ -29,12 +43,27 @@ def _normalize_required_name(value: str, field_name: str) -> str:
 
 
 def _normalize_valid_until(value: datetime) -> datetime:
+    """Привести дату окончания пропуска к формату, используемому в базе.
+
+    Frontend может прислать datetime с timezone. В базе проекта даты хранятся
+    как naive datetime, поэтому значение переводится в локальный вид без
+    временной зоны, чтобы сравнения срока действия пропуска работали одинаково.
+    """
+
     if value.tzinfo is None:
         return value
     return value.astimezone().replace(tzinfo=None)
 
 
 async def _read_upload_file(upload: UploadFile | None, empty_detail: str) -> tuple[bytes, str] | None:
+    """Прочитать необязательный файл формы гостя.
+
+    При создании пропуска могут прийти фото лица и фото полного роста. Если файл
+    не передан, функция возвращает ``None``. Если поле есть, но файл пустой,
+    пользователь получает понятную ошибку, потому что биометрические сервисы не
+    смогут обработать пустой payload.
+    """
+
     if upload is None:
         return None
     payload = await upload.read()
@@ -44,6 +73,8 @@ async def _read_upload_file(upload: UploadFile | None, empty_detail: str) -> tup
 
 
 class GuestRead(SQLModel):
+    """DTO гостя для списка гостей и модального окна пропуска на frontend."""
+
     id: int
     last_name: str
     first_name: str
@@ -58,6 +89,7 @@ class GuestRead(SQLModel):
 
 
 def build_employee_name(employee: Employee | None) -> str | None:
+    """Собрать ФИО сотрудника для отображения в карточке гостя."""
     if not employee:
         return None
     full_name = " ".join(
@@ -67,6 +99,7 @@ def build_employee_name(employee: Employee | None) -> str | None:
 
 
 def build_guest_read(session: Session, guest: Guest) -> GuestRead:
+    """Преобразовать модель Guest в ответ, удобный для frontend."""
     sample = session.exec(select(GuestFaceSample).where(GuestFaceSample.guest_id == guest.id)).first()
     employee = session.get(Employee, guest.employee_id) if guest.employee_id else None
     return GuestRead(
@@ -83,6 +116,7 @@ def build_guest_read(session: Session, guest: Guest) -> GuestRead:
     dependencies=[Depends(require_permissions(GUESTS_READ))],
 )
 def get_guests(session: Session = Depends(get_session)):
+    """Вернуть гостей со статусом пропуска, id фото лица и признаком Re-ID."""
     guests = session.exec(select(Guest).order_by(Guest.id.desc())).all()
     return [build_guest_read(session, guest) for guest in guests]
 
@@ -104,6 +138,19 @@ async def create_guest(
     body_photo: UploadFile | None = File(None),
     session: Session = Depends(get_session),
 ):
+    """Создать гостевой пропуск из multipart-формы.
+
+    Параметры:
+        last_name: обязательная фамилия гостя.
+        first_name: обязательное имя гостя.
+        middle_name: необязательное отчество.
+        employee_id: сотрудник, к которому оформляется визит.
+        valid_until: дата и время окончания действия пропуска.
+        photo: старое поле изображения для обратной совместимости.
+        face_photo: фото лица для создания GuestFaceSample.
+        body_photo: фото полного роста для создания ``body_embedding`` Re-ID.
+        session: сессия работы с базой данных.
+    """
     valid_until = _normalize_valid_until(valid_until)
     current_time = datetime.now()
     
@@ -212,6 +259,7 @@ async def upload_guest_body_photo(
     body_photo: UploadFile = File(...),
     session: Session = Depends(get_session),
 ):
+    """Загрузить или заменить фото полного роста и обновить Re-ID вектор гостя."""
     guest = session.get(Guest, guest_id)
     if not guest:
         raise HTTPException(status_code=404, detail="Гость не найден")
@@ -247,6 +295,7 @@ async def upload_guest_body_photo(
     dependencies=[Depends(require_permissions(GUEST_PASSES_CLOSE))],
 )
 def deactivate_guest(guest_id: int, session: Session = Depends(get_session)):
+    """Немедленно закрыть пропуск гостя без удаления исторических журналов."""
     guest = session.get(Guest, guest_id)
     if not guest:
         raise HTTPException(status_code=404, detail="Гость не найден")
@@ -266,6 +315,7 @@ def deactivate_guest(guest_id: int, session: Session = Depends(get_session)):
     dependencies=[Depends(require_permissions(GUESTS_READ))],
 )
 def get_guest_photo(photo_id: int, session: Session = Depends(get_session)):
+    """Вернуть бинарные данные сохранённого фото лица по id GuestFaceSample."""
     sample = session.get(GuestFaceSample, photo_id)
     if not sample:
         raise HTTPException(status_code=404, detail="Фото не найдено")

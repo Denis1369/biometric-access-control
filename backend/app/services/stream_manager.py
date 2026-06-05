@@ -1,3 +1,16 @@
+"""Управление live-потоками камер и онлайн-распознаванием.
+
+StreamManager запускается при старте backend-а и создаёт worker для каждой
+активной камеры. Worker читает кадры из RTSP/file-источника, хранит последний
+JPEG для WebSocket-просмотра и периодически запускает распознавание. Если камера
+настроена как demo-видео, распознавание включается только на короткое время при
+открытии просмотра, чтобы фоновые file-камеры не засоряли журнал событиями.
+
+Этот сервис связывает несколько подсистем: чтение видео, распознавание лица,
+Re-ID гостя по телу, запись AccessLog/TrackingLog и WebSocket-публикацию новых
+событий проходной.
+"""
+
 from __future__ import annotations
 
 import logging
@@ -39,20 +52,39 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 @dataclass(frozen=True)
 class StreamSourceConfig:
+    """Нормализованное описание источника камеры.
+
+    raw_value — то, что хранится в базе; resolved_value — путь или URL, который
+    реально передаётся reader-у; source_kind показывает, live это поток или
+    локальный видеофайл.
+    """
+
     raw_value: str
     resolved_value: str
     source_kind: str
 
     @property
     def is_live(self) -> bool:
+        """Показать, является ли источник реальным live-потоком камеры."""
+
         return self.source_kind == "live"
 
     @property
     def should_loop(self) -> bool:
+        """Показать, нужно ли зацикливать источник как демонстрационное видео."""
+
         return self.source_kind == "video_file"
 
 
 def _normalize_video_file_path(raw_path: str) -> str:
+    """Привести путь file-видео к абсолютному виду.
+
+    В БД могут храниться пути `file://test_video/1.mp4`, Windows-пути и варианты
+    с лишним первым слэшем после file://. Функция нормализует их относительно
+    корня проекта, чтобы demo-видео одинаково открывались из разных рабочих
+    директорий.
+    """
+
     normalized = raw_path.strip()
     if WINDOWS_ABSOLUTE_PATH_RE.match(normalized):
         normalized = normalized[1:]
@@ -65,6 +97,13 @@ def _normalize_video_file_path(raw_path: str) -> str:
 
 
 def _parse_stream_source(source_value: str) -> StreamSourceConfig:
+    """Разобрать источник камеры на live-поток или локальное видео.
+
+    RTSP/HTTP-адреса считаются live-источниками, а `file://...` — demo-видео.
+    Это влияет на поведение worker-а: live-камера распознаётся постоянно, а
+    file-видео может зацикливаться и включать распознавание только по запросу.
+    """
+
     normalized = source_value.strip()
     if normalized.lower().startswith(VIDEO_FILE_PREFIX):
         raw_path = normalized[len(VIDEO_FILE_PREFIX):]
@@ -87,6 +126,13 @@ def _encode_frame_to_jpeg(
     max_width: int | None = None,
     max_height: int | None = None,
 ) -> bytes | None:
+    """Сжать BGR-кадр в JPEG для отправки в браузер.
+
+    WebSocket просмотра камеры отправляет не numpy-массив, а JPEG-байты. При
+    необходимости кадр уменьшается до заданного размера, чтобы не перегружать
+    сеть и frontend при live-просмотре.
+    """
+
     try:
         image = Image.fromarray(frame[:, :, ::-1].copy(), mode="RGB")
         if max_width or max_height:
@@ -110,7 +156,17 @@ def _encode_frame_to_jpeg(
 
 
 class CameraStreamWorker:
+    """Worker одной камеры: чтение кадров, preview и распознавание.
+
+    У worker-а два daemon-потока. Первый читает кадры и обновляет последний JPEG
+    для просмотра. Второй берёт свежий BGR-кадр и запускает распознавание с
+    cooldown-ами, чтобы журнал не заполнялся десятками одинаковых событий с
+    одной камеры.
+    """
+
     def __init__(self, camera_id: int, source_value: str, direction: str):
+        """Подготовить worker камеры, но ещё не запускать потоки."""
+
         self.camera_id = camera_id
         self.source_config = _parse_stream_source(source_value)
         self.direction = direction
@@ -145,6 +201,8 @@ class CameraStreamWorker:
         self.trigger_unavailable_logged = False
 
     def start(self):
+        """Запустить поток чтения кадров и поток распознавания."""
+
         self.is_running = True
         self.capture_thread = threading.Thread(target=self._capture_loop, daemon=True)
         self.recognition_thread = threading.Thread(target=self._recognition_loop, daemon=True)
@@ -152,6 +210,8 @@ class CameraStreamWorker:
         self.recognition_thread.start()
 
     def stop(self):
+        """Остановить worker и освободить reader источника."""
+
         self.is_running = False
         if self.capture_thread:
             self.capture_thread.join(timeout=2)
@@ -160,6 +220,8 @@ class CameraStreamWorker:
         self._release_reader()
 
     def _release_reader(self):
+        """Закрыть текущий reader камеры, если он был открыт."""
+
         with self.reader_lock:
             if self.reader:
                 try:
@@ -169,6 +231,12 @@ class CameraStreamWorker:
                 self.reader = None
 
     def _open_reader(self) -> BaseFrameReader | None:
+        """Открыть источник камеры через video_readers.
+
+        Ошибка открытия не должна ронять весь backend: worker вернёт None,
+        подождёт и попробует подключиться снова в capture loop.
+        """
+
         self._release_reader()
         try:
             reader = create_frame_reader(
@@ -194,6 +262,14 @@ class CameraStreamWorker:
         first_frame_timestamp: float | None,
         last_frame_sent_at: float | None,
     ) -> tuple[float, float | None, float | None, float | None]:
+        """Синхронизировать воспроизведение file-видео с его timestamp-ами.
+
+        Для demo-видео важно не прочитать MP4 мгновенно. Worker ждёт между
+        кадрами так, чтобы воспроизведение примерно соответствовало времени
+        записи. Если timestamp кадра отсутствует, используется fps видео или
+        целевой fps worker-а.
+        """
+
         now = time.time()
 
         if frame_timestamp is not None:
@@ -222,6 +298,8 @@ class CameraStreamWorker:
         return now, playback_started_at, first_frame_timestamp, now
 
     def _set_latest_frame(self, frame_bytes: bytes | None):
+        """Сохранить последний JPEG-кадр для WebSocket-просмотра."""
+
         with self.frame_lock:
             self.latest_frame = frame_bytes
             self.last_frame_at = time.time() if frame_bytes else 0.0
@@ -229,13 +307,19 @@ class CameraStreamWorker:
                 self.latest_frame_version += 1
 
     def _set_recognition_frame(self, frame_bgr: np.ndarray | None):
+        """Сохранить копию последнего BGR-кадра для распознавания."""
+
         with self.recognition_frame_lock:
             self.latest_frame_for_recognition = None if frame_bgr is None else frame_bgr.copy()
 
     def is_demo_source(self) -> bool:
+        """Проверить, является ли камера локальным demo-видео."""
+
         return self.source_config.source_kind == "video_file"
 
     def is_recognition_enabled(self) -> bool:
+        """Определить, нужно ли сейчас запускать распознавание на камере."""
+
         if self.source_config.is_live:
             return True
 
@@ -243,6 +327,13 @@ class CameraStreamWorker:
             return time.time() < self.demo_recognition_enabled_until
 
     def set_demo_recognition_enabled(self, enabled: bool) -> bool:
+        """Включить или выключить временное распознавание для demo-видео.
+
+        При включении сбрасываются cooldown-ы и запрашивается перезапуск
+        воспроизведения, чтобы пользователь увидел анализ с начала ролика, а не
+        с произвольного места.
+        """
+
         if self.source_config.is_live:
             return True
 
@@ -264,18 +355,48 @@ class CameraStreamWorker:
         return self.is_recognition_enabled()
 
     def get_latest_frame(self, max_age_sec: float = 3.0) -> bytes | None:
+        """Вернуть последний JPEG-кадр камеры для старого HTTP-сценария просмотра.
+
+        Основной live-просмотр сейчас завязан на WebSocket, но функция остаётся
+        полезной как простая точка доступа: она отдаёт только байты изображения
+        без номера версии кадра. Если кадр слишком старый, считается, что поток
+        недоступен, и вызывающий код получает ``None``.
+        """
+
         payload = self.get_latest_frame_payload(max_age_sec=max_age_sec)
         if payload is None:
             return None
         return payload[0]
 
     def get_latest_frame_payload(self, max_age_sec: float = 3.0) -> tuple[bytes, int] | None:
+        """Вернуть последний JPEG-кадр и его версию для потоковой отправки.
+
+        Номер версии увеличивается при каждом новом кадре. WebSocket endpoint
+        использует его, чтобы не отправлять клиенту один и тот же JPEG много раз
+        подряд. ``max_age_sec`` защищает интерфейс от показа зависшего кадра:
+        если камера давно не присылала изображение, frontend должен увидеть, что
+        поток сейчас недоступен.
+        """
+
         with self.frame_lock:
             if not self.latest_frame or (time.time() - self.last_frame_at > max_age_sec):
                 return None
             return self.latest_frame, self.latest_frame_version
 
     def _capture_loop(self):
+        """Постоянно читать кадры из камеры и готовить preview для frontend.
+
+        Это лёгкий поток worker-а. Он не занимается распознаванием, а только
+        поддерживает актуальный кадр камеры: открывает reader, читает следующий
+        кадр, для demo-видео соблюдает скорость воспроизведения, сжимает кадр в
+        JPEG и сохраняет копию BGR-кадра для второго потока распознавания.
+
+        Если источник временно недоступен, worker не завершает работу. Он
+        закрывает reader, ждёт небольшую паузу и пробует подключиться снова.
+        Такое поведение важно для реальных IP-камер: сеть может моргнуть, но
+        оператор не должен вручную перезапускать backend.
+        """
+
         reconnect_delay = 2.0
         frame_interval = 1.0 / self.stream_target_fps
         last_encode_time = 0.0
@@ -364,6 +485,19 @@ class CameraStreamWorker:
                 time.sleep(reconnect_delay)
 
     def _recognition_loop(self):
+        """Периодически запускать биометрический анализ последнего кадра.
+
+        Этот поток отделён от чтения кадров, потому что распознавание лица,
+        YOLO-триггер и Re-ID намного тяжелее простого декодирования видео. Если
+        анализ занимает больше времени, просмотр камеры всё равно остаётся
+        живым: capture loop продолжает обновлять preview, а recognition loop
+        берёт только самый свежий кадр.
+
+        Для локальных demo-видео распознавание включается временно. Это нужно,
+        чтобы file-камеры не создавали бесконечные события в журналах, пока
+        пользователь просто смотрит страницу.
+        """
+
         while self.is_running:
             try:
                 if not self.is_recognition_enabled():
@@ -385,6 +519,14 @@ class CameraStreamWorker:
                 time.sleep(0.5)
 
     def _should_emit_event(self, cooldown_key: str, ttl_sec: float) -> bool:
+        """Проверить cooldown перед записью события в журнал.
+
+        Камера видит человека не один раз, а десятки кадров подряд. Без cooldown
+        один проход превратился бы в длинную пачку одинаковых AccessLog или
+        TrackingLog. Ключ строится по смыслу события: например, конкретный
+        гость, конкретный сотрудник или неизвестное лицо.
+        """
+
         current_time = time.time()
         last_seen = self.cooldowns.get(cooldown_key, 0.0)
         if current_time - last_seen <= ttl_sec:
@@ -394,6 +536,14 @@ class CameraStreamWorker:
 
     @staticmethod
     def _match_confidence(distance: float | None) -> float | None:
+        """Преобразовать расстояние между embedding в понятную уверенность.
+
+        Модели распознавания обычно возвращают не “процент совпадения”, а
+        расстояние между векторами признаков: чем меньше расстояние, тем ближе
+        лица. Для журнала и интерфейса удобнее хранить значение от 0 до 1, где
+        больше означает более уверенное совпадение.
+        """
+
         if distance is None:
             return None
         return max(0.0, min(1.0, 1.0 - float(distance)))
@@ -407,6 +557,15 @@ class CameraStreamWorker:
         status: str,
         confidence: float | None = None,
     ) -> AccessLog:
+        """Создать запись журнала проходов для контрольной точки.
+
+        AccessLog отражает решение системы доступа: пропустить человека или
+        зафиксировать отказ. Запись связывается с камерой worker-а, а также с
+        сотрудником или гостем, если личность удалось определить. Коммит
+        выполняет вызывающий код, чтобы можно было в одной транзакции сохранить
+        несколько связанных изменений.
+        """
+
         access_log = AccessLog(
             employee_id=employee_id,
             guest_id=guest_id,
@@ -425,6 +584,15 @@ class CameraStreamWorker:
         employee_id: int | None = None,
         confidence: float,
     ) -> None:
+        """Создать событие появления человека на внутренней камере.
+
+        TrackingLog не является решением “пустить/не пустить”. Это факт, что
+        человек был замечен на конкретной камере в конкретное время. Позже эти
+        события используются модулем вероятного маршрута: камера даёт зону
+        видимости, зона пересекается с графом маршрутов, и система строит путь
+        между последовательными событиями.
+        """
+
         session.add(
             TrackingLog(
                 guest_id=guest_id,
@@ -435,6 +603,22 @@ class CameraStreamWorker:
         )
 
     def _handle_access(self, frame_bgr: np.ndarray):
+        """Проанализировать один кадр камеры и записать нужные события.
+
+        Это центральная логика live-анализа. Сначала, если включён быстрый
+        YOLO-триггер, система проверяет, есть ли в кадре человек. Пустые кадры
+        пропускаются, чтобы не тратить время на тяжёлое распознавание лица.
+
+        Дальше кадр проверяется по лицу. Если найден сотрудник или активный
+        гость и решение распознавания положительное, создаётся AccessLog. Если
+        это гость на внутренней камере, дополнительно создаётся TrackingLog для
+        будущего построения маршрута. Если лица не видно, но камера внутренняя,
+        система пробует Re-ID по телу, чтобы найти гостя по внешнему виду.
+
+        Неизвестное лицо тоже фиксируется в AccessLog со статусом отказа. Это
+        помогает оператору видеть подозрительные события в журнале проходной.
+        """
+
         if settings.analysis_trigger_enabled:
             with ml_lock:
                 presence_detections = detect_person_presence(frame_bgr)
@@ -569,17 +753,37 @@ class CameraStreamWorker:
 
 
 class StreamManager:
+    """Реестр всех запущенных worker-ов камер.
+
+    Объект создаётся один раз на уровне приложения. При старте backend-а он
+    читает активные камеры из базы и запускает для каждой ``CameraStreamWorker``.
+    API камер использует этот manager, чтобы добавить worker после создания
+    камеры, остановить worker после удаления камеры или получить последний кадр
+    для просмотра.
+    """
+
     def __init__(self):
+        """Создать пустой реестр worker-ов и lock для потокобезопасного доступа."""
+
         self.workers: dict[int, CameraStreamWorker] = {}
         self.lock = threading.Lock()
 
     def start_all(self):
+        """Запустить потоки для всех активных камер из базы данных."""
+
         with Session(engine) as session:
             cameras = session.exec(select(Camera).where(Camera.is_active.is_(True))).all()
             for cam in cameras:
                 self.add_camera(cam.id, cam.ip_address, cam.direction)
 
     def add_camera(self, camera_id: int, source_value: str, direction: str):
+        """Добавить или перезапустить worker одной камеры.
+
+        Если камера уже была запущена, старый worker сначала останавливается.
+        Это важно при изменении адреса потока или направления камеры: backend
+        должен начать читать новый источник без полного перезапуска приложения.
+        """
+
         self.remove_camera(camera_id)
         worker = CameraStreamWorker(camera_id, source_value, direction)
         with self.lock:
@@ -588,6 +792,8 @@ class StreamManager:
         logger.info("Запущен поток для камеры %s", camera_id)
 
     def remove_camera(self, camera_id: int):
+        """Остановить worker камеры и удалить его из реестра."""
+
         with self.lock:
             worker = self.workers.pop(camera_id, None)
         if worker:
@@ -595,6 +801,8 @@ class StreamManager:
             logger.info("Остановлен поток для камеры %s", camera_id)
 
     def get_latest_frame(self, camera_id: int, max_age_sec: float = 3.0):
+        """Получить последний JPEG-кадр конкретной камеры без версии кадра."""
+
         with self.lock:
             worker = self.workers.get(camera_id)
         if worker:
@@ -602,6 +810,8 @@ class StreamManager:
         return None
 
     def get_latest_frame_payload(self, camera_id: int, max_age_sec: float = 3.0):
+        """Получить последний JPEG-кадр камеры вместе с номером версии."""
+
         with self.lock:
             worker = self.workers.get(camera_id)
         if worker:
@@ -609,6 +819,14 @@ class StreamManager:
         return None
 
     def set_demo_recognition_enabled(self, camera_id: int, enabled: bool):
+        """Включить или выключить временный анализ demo-видео камеры.
+
+        Для реальной live-камеры распознавание работает постоянно, а для
+        ``file://`` источников включается только по запросу пользователя. Так
+        демонстрационные ролики не засоряют журнал событий, пока интерфейс
+        открыт в фоне.
+        """
+
         with self.lock:
             worker = self.workers.get(camera_id)
         if worker is None:

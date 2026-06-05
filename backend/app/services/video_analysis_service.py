@@ -1,3 +1,11 @@
+"""Сервис анализа видеофайлов, загруженных пользователем.
+
+В отличие от анализа маршрута гостя, этот модуль обрабатывает один загруженный
+видеофайл и создаёт события с preview-кадрами для распознанных и неизвестных
+людей. Его использует страница «Анализ видео», где можно показать, как система
+принимает решение по лицу на сохранённом ролике, не подключаясь к реальной камере.
+"""
+
 from __future__ import annotations
 
 import logging
@@ -27,6 +35,14 @@ logger = logging.getLogger(__name__)
 
 
 def build_video_analysis_job_payload(job: VideoAnalysisJob) -> dict:
+    """Подготовить состояние задания анализа видео для API и WebSocket.
+
+    В базе задание хранится как SQLModel-объект, но frontend получает обычный
+    JSON-объект. Функция оставляет только те поля, которые нужны интерфейсу:
+    статус обработки, прогресс по кадрам, количество разрешённых/запрещённых
+    событий, время начала/завершения и текст ошибки, если обработка завершилась
+    неудачно.
+    """
     return {
         "id": job.id,
         "original_filename": job.original_filename,
@@ -45,6 +61,12 @@ def build_video_analysis_job_payload(job: VideoAnalysisJob) -> dict:
 
 
 def publish_video_analysis_job_update(job: VideoAnalysisJob) -> None:
+    """Отправить подписанным клиентам новое состояние задания анализа видео.
+
+    Страница анализа видео не должна постоянно опрашивать backend. Вместо этого
+    она подписывается на WebSocket-тему конкретного задания, а сервис публикует
+    обновление после изменения статуса, прогресса или ошибки.
+    """
     if job.id is None:
         return
     topic_ws_manager.publish(
@@ -54,12 +76,26 @@ def publish_video_analysis_job_update(job: VideoAnalysisJob) -> None:
 
 
 def _job_dir(job_id: int) -> Path:
+    """Вернуть папку артефактов конкретного задания анализа видео.
+
+    В этой папке хранятся preview-кадры событий. Они не лежат в базе данных,
+    потому что это временные демонстрационные изображения, которые нужны только
+    для просмотра результата анализа пользователем.
+    """
+
     path = BASE_STORAGE_DIR / f"job_{job_id}"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
 
 def _cleanup_job_artifacts(job_id: int):
+    """Удалить preview-кадры прошлого запуска задания.
+
+    При повторном анализе того же видео старые изображения больше не должны
+    отображаться в интерфейсе. Поэтому перед сбросом задания очищаются файлы
+    ``event_*.jpg`` из папки конкретного job.
+    """
+
     job_dir = _job_dir(job_id)
     for preview_path in job_dir.glob("event_*.jpg"):
         try:
@@ -69,6 +105,17 @@ def _cleanup_job_artifacts(job_id: int):
 
 
 def reset_video_analysis_job(job_id: int) -> bool:
+    """Очистить старые события и вернуть задание анализа видео в очередь.
+
+    Повторный запуск нужен, когда пользователь хочет заново обработать тот же
+    файл после изменения базы лиц или настроек распознавания. Функция удаляет
+    старые события, preview-кадры и сбрасывает счётчики прогресса.
+
+    Возвращает:
+        ``False``, если задание не существует или уже выполняется. В этом случае
+        сброс опасен, потому что можно удалить файлы, которые прямо сейчас
+        создаёт фоновый поток.
+    """
     with _active_jobs_lock:
         if job_id in _active_jobs:
             return False
@@ -103,6 +150,13 @@ def reset_video_analysis_job(job_id: int) -> bool:
 
 
 def _person_name(person) -> str | None:
+    """Собрать ФИО распознанного человека для отображения в событии.
+
+    Сервис распознавания может вернуть сотрудника или гостя, но у обеих моделей
+    есть фамилия и имя. Функция бережно собирает строку без лишних пробелов и
+    возвращает ``None``, если человек не найден.
+    """
+
     if not person:
         return None
     return " ".join(
@@ -118,12 +172,28 @@ FONT_CANDIDATES = [
 
 
 def _get_font(size: int = 28):
+    """Найти системный шрифт, который корректно отображает русские подписи.
+
+    Preview-кадр содержит текст “ДОСТУП РАЗРЕШЕН”, ФИО или “Неизвестное лицо”.
+    Если взять стандартный bitmap-шрифт PIL, кириллица может выглядеть плохо,
+    поэтому сначала пробуются распространённые Windows-шрифты.
+    """
+
     for path in FONT_CANDIDATES:
         if Path(path).exists():
             return ImageFont.truetype(path, size=size)
     return ImageFont.load_default()
 
+
 def _draw_preview(frame, lines: list[str]):
+    """Наложить на кадр читаемую плашку с результатом распознавания.
+
+    Пользователь в разделе “Анализ видео” должен не только увидеть таблицу
+    событий, но и быстро понять, на каком кадре система приняла решение.
+    Функция затемняет верхнюю область изображения и рисует несколько строк:
+    статус доступа, имя человека или неизвестное лицо, время внутри видео.
+    """
+
     preview = frame.copy()
     overlay = preview.copy()
     cv2.rectangle(overlay, (12, 12), (min(preview.shape[1] - 12, 920), 140), (15, 23, 42), -1)
@@ -144,6 +214,13 @@ def _draw_preview(frame, lines: list[str]):
 
 
 def _save_event_preview(job_id: int, frame_index: int, frame, status_label: str, detail_label: str, timestamp_sec: float) -> str:
+    """Сохранить preview-кадр события и вернуть путь к файлу.
+
+    Путь сохраняется в ``VideoAnalysisEvent.preview_path``. Затем API отдаёт
+    этот файл по отдельному endpoint-у, чтобы frontend мог показать доказательный
+    кадр рядом с событием распознавания.
+    """
+
     preview = _draw_preview(
         frame,
         [
@@ -158,6 +235,13 @@ def _save_event_preview(job_id: int, frame_index: int, frame, status_label: str,
 
 
 def _build_similarity(distance: float | None) -> float | None:
+    """Преобразовать расстояние между лицевыми embedding в уверенность.
+
+    Алгоритм распознавания возвращает distance: чем меньше значение, тем ближе
+    лица. Для таблицы событий понятнее отображать similarity в диапазоне от 0 до
+    1. Если distance отсутствует, значит уверенность посчитать нельзя.
+    """
+
     if distance is None:
         return None
     value = 1.0 - float(distance)
@@ -165,6 +249,13 @@ def _build_similarity(distance: float | None) -> float | None:
 
 
 def _update_job_status(job_id: int, status: str, **extra):
+    """Обновить состояние задания анализа видео и сразу уведомить frontend.
+
+    Все изменения статуса, прогресса, счётчиков и ошибки проходят через эту
+    функцию. После коммита отправляется WebSocket-событие, поэтому пользователь
+    видит движение прогресса без ручного обновления страницы.
+    """
+
     with Session(engine) as session:
         job = session.get(VideoAnalysisJob, job_id)
         if not job:
@@ -179,6 +270,13 @@ def _update_job_status(job_id: int, status: str, **extra):
 
 
 def _process_job(job_id: int):
+    """Защитная обёртка, которая не даёт запустить один job дважды.
+
+    Анализ видео выполняется в отдельном потоке. Если пользователь случайно
+    нажмёт повторный запуск или придёт два запроса подряд, набор ``_active_jobs``
+    не позволит двум потокам одновременно писать события одного задания.
+    """
+
     with _active_jobs_lock:
         if job_id in _active_jobs:
             return
@@ -192,6 +290,20 @@ def _process_job(job_id: int):
 
 
 def _run_job(job_id: int):
+    """Выполнить полный цикл анализа одного загруженного видео.
+
+    Функция открывает видео через общий reader, периодически берёт кадры с
+    интервалом ``sample_interval_sec``, кодирует кадр в JPEG и передаёт его в
+    сервис распознавания сотрудника. По результату создаются события:
+    ``granted`` для распознанного человека с положительным решением и ``denied``
+    для неизвестного лица или недостаточно уверенного совпадения.
+
+    События дедуплицируются по человеку и статусу, чтобы один человек, который
+    несколько секунд находится в кадре, не превратился в десятки одинаковых
+    строк. После каждого записанного события обновляется прогресс job и
+    отправляется WebSocket-уведомление.
+    """
+
     _update_job_status(job_id, "processing", started_at=datetime.now(), error_message=None)
 
     with Session(engine) as session:
@@ -320,5 +432,11 @@ def _run_job(job_id: int):
 
 
 def schedule_video_analysis(job_id: int):
+    """Запустить анализ загруженного видео в фоновом daemon-потоке.
+
+    API должен быстро вернуть ответ пользователю, поэтому тяжёлая обработка
+    кадров не выполняется внутри HTTP-запроса. Фоновый поток сам обновляет запись
+    задания в базе и отправляет прогресс через WebSocket.
+    """
     thread = threading.Thread(target=_process_job, args=(job_id,), daemon=True)
     thread.start()

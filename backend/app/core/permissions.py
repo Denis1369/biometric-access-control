@@ -1,3 +1,17 @@
+"""Ролевая модель и список permissions backend-а.
+
+В системе есть несколько реальных ролей пользователей. Super Admin может всё;
+техник отвечает за здания, этажи, планы, камеры, зоны видимости и граф
+маршрутов; HR ведёт сотрудников, отделы и должности; аналитик смотрит отчёты,
+журналы и маршруты; оператор КПП оформляет гостей, работает с проходной и может
+строить маршрут гостя.
+
+Endpoint-ы не должны проверять роли напрямую там, где важнее конкретное
+действие. Поэтому действия описаны строковыми permissions, а роли получают
+наборы этих permissions. Такой подход проще расширять: можно дать новой роли
+часть функций без переписывания всех router-ов.
+"""
+
 from app.models.user import UserRole
 
 
@@ -185,15 +199,40 @@ ROLE_PERMISSIONS = {
     UserRole.HR: HR_PERMISSIONS,
     UserRole.ANALYST: ANALYST_PERMISSIONS,
     UserRole.CHECKPOINT_OPERATOR: CHECKPOINT_OPERATOR_PERMISSIONS,
-    # Legacy mappings preserve access for old accounts until they are reassigned.
+    # Старые роли оставлены как мост для уже существующих учётных записей:
+    # если в базе остался прежний enum, пользователь не потеряет доступ до
+    # ручного переназначения роли администратором.
     UserRole.MANAGER_ANALYST: ANALYST_PERMISSIONS,
     UserRole.TECH_HR: TECHNICIAN_PERMISSIONS | HR_PERMISSIONS,
 }
 
 
 def get_permissions_for_role(role: UserRole) -> frozenset[str]:
+    """Вернуть набор действий, разрешённых роли.
+
+    Параметры:
+        role: Роль пользователя из таблицы users.
+
+    Возвращает:
+        frozenset permissions. Для неизвестной роли возвращается пустой набор,
+        чтобы доступ закрывался безопасно, а не открывался по умолчанию.
+    """
+
     return ROLE_PERMISSIONS.get(role, frozenset())
 
 
 def role_has_permission(role: UserRole, permission: str) -> bool:
+    """Проверить одно конкретное разрешение у роли.
+
+    Helper удобен в местах, где нужно не подключать FastAPI dependency, а просто
+    принять решение внутри сервиса или при сборке интерфейсного payload-а.
+
+    Параметры:
+        role: Роль пользователя.
+        permission: Строковый код действия, например `camera_zones:write`.
+
+    Возвращает:
+        True, если роль содержит указанное разрешение.
+    """
+
     return permission in get_permissions_for_role(role)

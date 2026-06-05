@@ -1,3 +1,10 @@
+"""Сервис Person Re-Identification для поиска и сопоставления гостей по телу.
+
+Сервис используется, когда лицо плохо видно для InsightFace. YOLO находит людей
+на BGR-кадрах из PyAV/OpenCV, TorchReID/OSNet строит embedding по силуэту и
+одежде, а затем эти векторы сравниваются с активными гостями из базы данных.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -29,8 +36,9 @@ torch = None
 YOLO = None
 FeatureExtractor = None
 
-# TorchReID pulls albumentations on import. Its default update check can block
-# backend startup in offline demo environments, so keep imports deterministic.
+# TorchReID при импорте подтягивает albumentations. У albumentations есть
+# проверка обновлений, которая может подвиснуть в offline-демо, поэтому заранее
+# отключаем её и делаем импорт ML-зависимостей предсказуемым.
 os.environ.setdefault("NO_ALBUMENTATIONS_UPDATE", "1")
 
 
@@ -47,6 +55,14 @@ _model_cache_configured = False
 
 
 def _ensure_torch_imported() -> bool:
+    """Лениво импортировать PyTorch и запомнить результат.
+
+    Re-ID нужен не для каждого запроса backend-а. Если импортировать тяжёлые ML
+    библиотеки при обычном открытии Swagger или авторизации, приложение будет
+    стартовать медленнее и может упасть на машине без GPU/torch. Поэтому импорт
+    выполняется только при первом реальном обращении к Re-ID.
+    """
+
     global _torch_import_checked, _torch_import_error, torch
     if _torch_import_checked:
         return torch is not None
@@ -63,6 +79,8 @@ def _ensure_torch_imported() -> bool:
 
 
 def _ensure_yolo_imported() -> bool:
+    """Лениво импортировать Ultralytics YOLO для поиска людей в кадре."""
+
     global YOLO, _yolo_import_checked, _yolo_import_error
     if _yolo_import_checked:
         return YOLO is not None
@@ -79,6 +97,13 @@ def _ensure_yolo_imported() -> bool:
 
 
 def _ensure_torchreid_imported() -> bool:
+    """Лениво импортировать TorchReID FeatureExtractor.
+
+    В разных версиях torchreid путь импорта может отличаться, поэтому сначала
+    пробуется основной вариант, а затем fallback. Если оба варианта недоступны,
+    Re-ID сервис корректно выключается и пишет причину в лог.
+    """
+
     global FeatureExtractor, _torchreid_import_checked, _torchreid_import_error
     if _torchreid_import_checked:
         return FeatureExtractor is not None
@@ -104,6 +129,15 @@ def _ensure_torchreid_imported() -> bool:
 
 @dataclass(frozen=True)
 class BodyDetection:
+    """Найденный силуэт человека вместе с Re-ID embedding.
+
+    Атрибуты:
+        bbox: прямоугольник человека в пикселях кадра: ``(x1, y1, x2, y2)``.
+        confidence: уверенность YOLO при обнаружении человека.
+        blur_score: дисперсия Лапласиана для отбрасывания смазанных crop-ов.
+        embedding: нормализованный OSNet-вектор тела найденного человека.
+    """
+
     bbox: tuple[int, int, int, int]
     confidence: float
     blur_score: float
@@ -112,6 +146,8 @@ class BodyDetection:
 
 @dataclass(frozen=True)
 class GuestBodyMatch:
+    """Лучшее Re-ID совпадение между найденным силуэтом и активным гостем."""
+
     guest: Guest
     distance: float
     similarity: float
@@ -120,11 +156,20 @@ class GuestBodyMatch:
 
 @dataclass(frozen=True)
 class PersonPresenceDetection:
+    """Лёгкое обнаружение человека, которое используется как дешёвый триггер анализа."""
+
     bbox: tuple[int, int, int, int]
     confidence: float
 
 
 def _normalize_embedding(vector: np.ndarray) -> np.ndarray:
+    """Нормализовать вектор признаков перед сравнением cosine distance.
+
+    Нормализация нужна, чтобы длина вектора не влияла на сравнение. После неё
+    расстояние показывает именно различие внешности, а не масштаб чисел,
+    вернувшихся из нейросети.
+    """
+
     norm = np.linalg.norm(vector)
     if norm == 0:
         raise ValueError("Получен нулевой body embedding")
@@ -132,6 +177,8 @@ def _normalize_embedding(vector: np.ndarray) -> np.ndarray:
 
 
 def _resolve_reid_device() -> str:
+    """Выбрать устройство для TorchReID: явно заданное, CUDA или CPU."""
+
     if settings.reid_device and settings.reid_device != "auto":
         return settings.reid_device
     if _ensure_torch_imported() and torch.cuda.is_available():
@@ -140,6 +187,8 @@ def _resolve_reid_device() -> str:
 
 
 def _resolve_model_file_path(value: str, fallback_name: str) -> Path:
+    """Получить путь к весам модели относительно папки models или как absolute path."""
+
     configured = (value or fallback_name).strip()
     path = Path(configured).expanduser()
     if path.is_absolute():
@@ -148,6 +197,14 @@ def _resolve_model_file_path(value: str, fallback_name: str) -> Path:
 
 
 def _download_file(url: str, target_path: Path, label: str) -> None:
+    """Скачать файл весов модели с несколькими попытками.
+
+    В production веса моделей обычно уже лежат на сервере. Для учебного проекта
+    удобнее иметь автоматическую загрузку по URL: если файл отсутствует, сервис
+    пытается скачать его и положить в папку моделей. Ошибки сохраняются с
+    понятным текстом, чтобы было ясно, какую модель не удалось получить.
+    """
+
     target_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = target_path.with_name(f"{target_path.name}.download")
     last_error: Exception | None = None
@@ -189,6 +246,8 @@ def _ensure_downloaded_model(
     label: str,
     url_env_name: str,
 ) -> Path:
+    """Убедиться, что файл весов модели существует и не пустой."""
+
     if target_path.exists() and target_path.stat().st_size > 0:
         return target_path
 
@@ -204,6 +263,13 @@ def _ensure_downloaded_model(
 
 
 def _configure_model_cache() -> None:
+    """Настроить локальные папки кеша моделей для torch/torchreid.
+
+    Без явного кеша библиотеки могут попытаться писать в системные директории
+    пользователя или скачивать веса в неожиданные места. Здесь всё направляется
+    в папку проекта, чтобы демо было воспроизводимым на учебном компьютере.
+    """
+
     global _model_cache_configured
 
     if _model_cache_configured:
@@ -220,6 +286,13 @@ def _configure_model_cache() -> None:
 
 
 def _log_unavailable_once(reason: str) -> None:
+    """Записать предупреждение о недоступности Re-ID только один раз.
+
+    Если зависимость или модель отсутствует, эта проблема будет встречаться на
+    каждом кадре. Чтобы лог не превратился в шум, причина пишется один раз, а
+    вызывающие функции просто возвращают пустой результат.
+    """
+
     global _availability_warning_logged
     if _availability_warning_logged:
         return
@@ -228,6 +301,14 @@ def _log_unavailable_once(reason: str) -> None:
 
 
 def _ensure_feature_extractor_ready() -> bool:
+    """Подготовить OSNet/TorchReID extractor для построения body embedding.
+
+    Extractor — это модель, которая получает crop человека и возвращает числовой
+    вектор внешности. Функция проверяет флаг включения Re-ID, наличие PyTorch и
+    TorchReID, наличие весов модели и выбранное устройство. Если что-то не
+    готово, сервис не падает, а становится недоступным с понятной причиной.
+    """
+
     global _feature_extractor, _extractor_initialization_error
 
     if not settings.reid_enabled:
@@ -287,6 +368,13 @@ def _ensure_feature_extractor_ready() -> bool:
 
 
 def _ensure_person_detector_ready() -> bool:
+    """Подготовить YOLO detector, который находит людей на полном кадре.
+
+    Перед тем как строить Re-ID embedding, нужно понять, где на изображении
+    находится человек. Для этого используется YOLO: она возвращает bbox-ы класса
+    person, а уже затем каждый crop передаётся в OSNet/TorchReID.
+    """
+
     global _person_detector, _detector_initialization_error
 
     if not _ensure_yolo_imported():
@@ -328,6 +416,8 @@ def _ensure_person_detector_ready() -> bool:
 
 
 def _ensure_reid_ready() -> bool:
+    """Проверить готовность обеих частей Re-ID: YOLO detector и OSNet extractor."""
+
     return _ensure_person_detector_ready() and _ensure_feature_extractor_ready()
 
 
@@ -335,6 +425,8 @@ def _clip_bbox(
     bbox: tuple[int, int, int, int],
     frame_shape: tuple[int, int, int],
 ) -> tuple[int, int, int, int] | None:
+    """Обрезать bbox по границам кадра и отбросить слишком маленькие области."""
+
     frame_h, frame_w = frame_shape[:2]
     x1, y1, x2, y2 = bbox
     x1 = max(0, min(int(x1), frame_w - 1))
@@ -347,6 +439,8 @@ def _clip_bbox(
 
 
 def _bbox_area(bbox: tuple[int, int, int, int]) -> int:
+    """Посчитать площадь прямоугольника bbox в пикселях."""
+
     x1, y1, x2, y2 = bbox
     return max(0, x2 - x1) * max(0, y2 - y1)
 
@@ -358,6 +452,14 @@ def _validate_crop(
     *,
     min_body_aspect_ratio: float = 1.0,
 ) -> float:
+    """Проверить, подходит ли crop человека для Re-ID.
+
+    OSNet хорошо работает, когда на crop-е виден достаточно крупный силуэт
+    человека. Если изображение слишком маленькое, смазанное, занимает крошечную
+    часть кадра или сильно обрезано границей, embedding получится нестабильным.
+    Такие crop-ы лучше пропустить, чем записать плохой вектор гостя.
+    """
+
     crop_h, crop_w = crop_bgr.shape[:2]
     if crop_w < settings.reid_min_crop_width or crop_h < settings.reid_min_crop_height:
         raise ValueError("силуэт слишком маленький для Re-ID")
@@ -391,6 +493,13 @@ def _detect_person_boxes(
     *,
     confidence: float | None = None,
 ) -> list[tuple[tuple[int, int, int, int], float]]:
+    """Найти bbox-ы людей на кадре через YOLO.
+
+    Возвращаются только bbox-ы класса person, уже обрезанные по границам кадра
+    и отсортированные по площади и уверенности. Сортировка важна при регистрации
+    гостя по фото: первый силуэт обычно самый крупный и наиболее подходящий.
+    """
+
     if not _ensure_person_detector_ready():
         return []
 
@@ -432,7 +541,17 @@ def detect_person_presence(
     *,
     confidence: float | None = None,
 ) -> list[PersonPresenceDetection] | None:
-    """Fast YOLO trigger used before expensive InsightFace/Re-ID analysis."""
+    """Проверить, есть ли человек в кадре, перед запуском тяжёлого анализа.
+
+    Параметры:
+        frame_bgr: текущий видеокадр в OpenCV BGR-формате.
+        confidence: необязательный порог уверенности YOLO. Если не передан,
+            используется значение из настроек приложения.
+
+    Возвращает:
+        Список найденных людей. ``None`` возвращается только когда детектор
+        недоступен, чтобы вызывающий код отличал «людей нет» от «модель упала».
+    """
     if frame_bgr is None or frame_bgr.size == 0:
         return []
 
@@ -456,6 +575,18 @@ def extract_body_detections(
     *,
     min_body_aspect_ratio: float = 1.0,
 ) -> list[BodyDetection]:
+    """Найти людей на кадре и построить Re-ID embedding для подходящих crop-ов.
+
+    Параметры:
+        frame_bgr: видеокадр из PyAV/OpenCV в цветовом порядке BGR.
+        min_body_aspect_ratio: минимальное отношение ``height / width`` для
+            crop-а тела. Оно отбрасывает только лицо или слишком обрезанный силуэт.
+
+    Возвращает:
+        Подходящие обнаружения людей с нормализованными OSNet-векторами.
+        Смазанные, слишком маленькие и обрезанные по границе crop-ы пропускаются,
+        а не приводят к ошибке всего анализа.
+    """
     if frame_bgr is None or frame_bgr.size == 0:
         return []
 
@@ -518,10 +649,12 @@ def extract_body_embedding_from_crop(
     validate_crop: bool = True,
     min_body_aspect_ratio: float | None = None,
 ) -> list[float] | None:
-    """Build a Re-ID embedding from an already cropped person image.
+    """Построить Re-ID embedding из уже вырезанного изображения человека.
 
-    This is useful for enrollment: an operator can provide a person/body photo
-    when face recognition is not reliable enough for issuing a pass.
+    Функция используется при регистрации гостя по фото полного роста. В отличие
+    от анализа полного кадра, сюда уже приходит crop человека или фотография,
+    где человек занимает основную часть изображения. После проверки качества
+    crop передаётся в TorchReID/OSNet, который возвращает вектор внешности.
     """
     if crop_bgr is None or crop_bgr.size == 0:
         return None
@@ -546,7 +679,7 @@ def extract_body_embedding_from_crop(
             logger.debug("Re-ID enrollment crop rejected: %s", exc)
             return None
 
-    # PyAV/OpenCV pipeline keeps frames in BGR, while TorchReID expects RGB.
+    # PyAV/OpenCV держат кадры в BGR, а TorchReID ожидает RGB-вход.
     crop_rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
     with _service_infer_lock:
         features = _feature_extractor([crop_rgb])
@@ -566,6 +699,17 @@ def extract_body_embedding_from_image_bytes(
     *,
     validate_crop: bool = True,
 ) -> list[float] | None:
+    """Построить embedding тела из байтов загруженного изображения.
+
+    Параметры:
+        image_bytes: исходные байты изображения, загруженного оператором.
+        validate_crop: нужно ли отбрасывать маленькие, смазанные или неверно
+            скадрированные изображения перед передачей в OSNet.
+
+    Возвращает:
+        Нормализованный Re-ID embedding или ``None``, если изображение не удалось
+        декодировать либо extractor недоступен.
+    """
     if not image_bytes:
         return None
 
@@ -580,7 +724,14 @@ def extract_body_embedding_from_image_bytes(
 def extract_primary_body_embedding_from_image_bytes(
     image_bytes: bytes,
 ) -> list[float] | None:
-    """Extract a body embedding from either a person crop or a full camera frame."""
+    """Извлечь основной body embedding из фото человека или полного кадра.
+
+    Если на изображении YOLO находит человека, берётся лучший найденный силуэт.
+    Если детектор ничего не нашёл, изображение трактуется как уже готовый crop и
+    передаётся напрямую в extractor. Это удобно для формы гостя: оператор может
+    загрузить как кадр с камеры, так и заранее обрезанное фото полного роста.
+    """
+
     if not image_bytes:
         return None
 
@@ -599,7 +750,9 @@ def extract_primary_body_embedding_from_image_bytes(
             min_body_aspect_ratio=settings.reid_min_body_aspect_ratio,
         )
 
-    # Detections are sorted by person bbox area/confidence in _detect_person_boxes.
+    # Детекции уже отсортированы по площади bbox и уверенности в
+    # _detect_person_boxes, поэтому первая обычно лучше всего подходит для
+    # регистрационного body_embedding.
     return detections[0].embedding
 
 
@@ -607,6 +760,8 @@ def _bbox_iou(
     box_a: tuple[int, int, int, int],
     box_b: tuple[int, int, int, int],
 ) -> float:
+    """Посчитать IoU двух bbox для выбора силуэта, связанного с лицом."""
+
     ax1, ay1, ax2, ay2 = box_a
     bx1, by1, bx2, by2 = box_b
     inter_x1 = max(ax1, bx1)
@@ -624,6 +779,14 @@ def _select_detection_for_face(
     detections: list[BodyDetection],
     face_bbox: tuple[int, int, int, int],
 ) -> BodyDetection | None:
+    """Выбрать person-detection, который соответствует найденному лицу.
+
+    Когда InsightFace уверенно распознал гостя по лицу, мы можем безопасно
+    обновить body embedding этого гостя. Но сначала нужно понять, какой именно
+    bbox человека относится к найденному лицу. В приоритете bbox, внутри
+    которого лежит центр лица; если такого нет, используется максимальный IoU.
+    """
+
     face_center_x = (face_bbox[0] + face_bbox[2]) / 2.0
     face_center_y = (face_bbox[1] + face_bbox[3]) / 2.0
 
@@ -644,6 +807,17 @@ def extract_body_detection_for_face(
     frame_bgr: np.ndarray,
     face_bbox: tuple[int, int, int, int],
 ) -> BodyDetection | None:
+    """Выбрать силуэт, который с наибольшей вероятностью относится к найденному лицу.
+
+    Параметры:
+        frame_bgr: текущий кадр в BGR-формате.
+        face_bbox: прямоугольник лица от InsightFace в пикселях кадра.
+
+    Возвращает:
+        Подходящий силуэт или ``None``, если не найден crop человека нужного
+        качества. Используется для обновления body embedding гостя после
+        уверенного распознавания лица.
+    """
     detections = extract_body_detections(frame_bgr)
     if not detections:
         return None
@@ -651,6 +825,13 @@ def extract_body_detection_for_face(
 
 
 def _load_active_guest_embeddings(session: Session) -> list[tuple[Guest, np.ndarray]]:
+    """Загрузить body embedding активных гостей с действующим пропуском.
+
+    Re-ID не должен сопоставлять кадр с просроченными или отключёнными гостями.
+    Поэтому в live-режиме выбираются только активные пропуска, срок действия
+    которых ещё не закончился.
+    """
+
     guests = session.exec(
         select(Guest).where(
             Guest.is_active.is_(True),
@@ -675,6 +856,16 @@ def match_guest_by_body(
     frame_bgr: np.ndarray,
     session: Session,
 ) -> GuestBodyMatch | None:
+    """Сопоставить людей на кадре с активными гостями по одежде и силуэту.
+
+    Параметры:
+        frame_bgr: текущий BGR-кадр видео.
+        session: сессия базы данных для загрузки embedding активных гостей.
+
+    Возвращает:
+        Ближайшее совпадение гостя ниже настроенного порога cosine distance или
+        ``None``, если надёжное Re-ID совпадение не найдено.
+    """
     guest_embeddings = _load_active_guest_embeddings(session)
     if not guest_embeddings:
         return None
@@ -712,6 +903,16 @@ def update_guest_body_embedding(
     guest: Guest,
     new_embedding: list[float],
 ) -> None:
+    """Обновить body embedding гостя через экспоненциальное скользящее среднее.
+
+    Параметры:
+        session: активная сессия базы данных.
+        guest: гость, вектор внешности которого нужно обновить.
+        new_embedding: новый нормализованный OSNet-вектор из текущего кадра.
+
+    Сглаживание делает вектор стабильнее, но всё ещё позволяет адаптироваться к
+    умеренным изменениям одежды, освещения и ракурса камеры.
+    """
     next_vector = _normalize_embedding(np.asarray(new_embedding, dtype=np.float32))
 
     if guest.body_embedding:
@@ -737,6 +938,18 @@ def update_guest_body_embedding_from_frame(
     frame_bgr: np.ndarray,
     face_bbox: tuple[int, int, int, int],
 ) -> BodyDetection | None:
+    """Обновить body embedding гостя после распознавания этого гостя по лицу.
+
+    Параметры:
+        session: активная сессия базы данных.
+        guest: гость, распознанный по лицу.
+        frame_bgr: полный кадр, на котором найдено лицо.
+        face_bbox: прямоугольник лица, по которому выбирается правильный crop тела.
+
+    Возвращает:
+        Силуэт, использованный для обновления, или ``None``, если подходящий crop
+        не найден. Коммит транзакции выполняет вызывающий код вместе с журналами.
+    """
     detection = extract_body_detection_for_face(frame_bgr, face_bbox)
     if detection is None:
         return None

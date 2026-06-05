@@ -1,3 +1,11 @@
+"""API справочника зданий.
+
+Здание является верхним уровнем структуры объекта: внутри здания создаются этажи,
+на этажах загружаются планы, размещаются камеры, зоны видимости и граф маршрутов.
+Эти endpoint-ы используются в разделе «План здания», где техник или
+super-admin подготавливает объект для дальнейшей работы системы контроля доступа.
+"""
+
 from datetime import datetime
 from typing import List
 
@@ -15,16 +23,26 @@ from app.models.floors import Floor
 router = APIRouter(prefix="/api/buildings", tags=["Здания"])
 
 class BuildingCreate(SQLModel):
+    """Данные, которые frontend отправляет при создании нового здания."""
+
     name: str = Field(min_length=1)
     address: str | None = None
 
 
 class BuildingUpdate(SQLModel):
+    """Частичное обновление здания.
+
+    Все поля необязательные, потому что PATCH может изменить только название,
+    только адрес или оба поля сразу.
+    """
+
     name: str | None = None
     address: str | None = None
 
 
 class BuildingRead(SQLModel):
+    """Представление здания, возвращаемое frontend-у."""
+
     id: int
     name: str
     address: str | None = None
@@ -32,6 +50,12 @@ class BuildingRead(SQLModel):
 
 
 def _normalize_required_name(value: str, field_name: str) -> str:
+    """Очистить обязательное строковое поле и запретить пустые названия.
+
+    Проверка нужна не только для красоты интерфейса. Пустое название здания
+    делает невозможной нормальную работу выпадающих списков и создаёт путаницу
+    при выборе этажа, поэтому backend жёстко отклоняет такие значения.
+    """
     normalized = value.strip()
     if not normalized:
         raise HTTPException(
@@ -49,6 +73,12 @@ def _normalize_required_name(value: str, field_name: str) -> str:
     dependencies=[Depends(require_permissions(BUILDINGS_READ))],
 )
 def get_buildings(session: Session = Depends(get_session)):
+    """Вернуть список зданий для выбора объекта в интерфейсе.
+
+    Страница плана здания сначала загружает здания, затем по выбранному зданию
+    получает этажи. Список сортируется по названию, чтобы оператору было проще
+    найти нужный объект.
+    """
     statement = select(Building).order_by(Building.name.asc())
     return session.exec(statement).all()
 
@@ -61,6 +91,12 @@ def get_buildings(session: Session = Depends(get_session)):
     dependencies=[Depends(require_permissions(BUILDINGS_READ))],
 )
 def get_building(building_id: int, session: Session = Depends(get_session)):
+    """Вернуть одну карточку здания по идентификатору.
+
+    Endpoint нужен для экранов редактирования и для случаев, когда frontend
+    открывает ссылку на конкретное здание. Если запись удалена или id ошибочный,
+    возвращается 404, чтобы интерфейс мог показать понятное сообщение.
+    """
     building = session.get(Building, building_id)
     if not building:
         raise HTTPException(
@@ -79,6 +115,12 @@ def get_building(building_id: int, session: Session = Depends(get_session)):
     dependencies=[Depends(require_permissions(BUILDINGS_WRITE))],
 )
 def create_building(payload: BuildingCreate, session: Session = Depends(get_session)):
+    """Создать новое здание в справочнике.
+
+    Функция вызывается техником или super-admin. Backend нормализует название,
+    сохраняет адрес и отдельно обрабатывает конфликт уникальности, чтобы вместо
+    технической ошибки базы данных пользователь увидел понятное сообщение.
+    """
     building = Building(
         name=_normalize_required_name(payload.name, "name"),
         address=payload.address.strip() if payload.address else None,
@@ -109,6 +151,12 @@ def update_building(
     payload: BuildingUpdate,
     session: Session = Depends(get_session),
 ):
+    """Изменить название или адрес существующего здания.
+
+    При обновлении нельзя допустить пустое название и дублирование зданий с
+    одинаковыми названиями. Поэтому функция сначала загружает запись, применяет
+    только переданные поля, а затем перехватывает ошибку уникальности.
+    """
     building = session.get(Building, building_id)
     if not building:
         raise HTTPException(
