@@ -94,6 +94,17 @@
                 </div>
               </div>
 
+              <button
+                class="btn-primary full-width-btn"
+                @click="takeBodySnapshot"
+                :disabled="!selectedCameraId || isTakingBodySnapshot"
+              >
+                <i class="pi" :class="isTakingBodySnapshot ? 'pi-spin pi-spinner' : 'pi-camera'"></i>
+                Сделать снимок полного роста
+              </button>
+
+              <div class="divider"><span>ИЛИ</span></div>
+
               <button class="btn-text upload-btn full-width-btn" @click="$refs.bodyFileInput.click()">
                 <i class="pi pi-upload"></i> Загрузить полный рост
               </button>
@@ -185,13 +196,33 @@
         </div>
 
         <p class="capture-hint">
-          Гость: {{ formatGuestName(bodyPhotoGuest) }}. Загрузите кадр, где человек виден в полный рост.
+          Гость: {{ formatGuestName(bodyPhotoGuest) }}. Сделайте снимок с камеры или загрузите кадр, где человек виден в полный рост.
         </p>
         <div class="avatar-preview body-preview modal-preview">
           <img v-if="bodyEnrollmentPreview" :src="bodyEnrollmentPreview" class="avatar-img large" />
           <div v-else class="avatar-placeholder large">
             <i class="pi pi-id-card"></i>
           </div>
+        </div>
+        <div class="capture-controls">
+          <label class="control-label">Камера проходной:</label>
+          <select v-model="selectedCameraId" class="form-input">
+            <option value="" disabled>Выберите камеру...</option>
+            <option v-for="cam in activeCameras" :key="cam.id" :value="cam.id">
+              {{ cam.name }}
+            </option>
+          </select>
+
+          <button
+            class="btn-primary full-width-btn"
+            @click="takeBodyEnrollmentSnapshot"
+            :disabled="!selectedCameraId || isTakingBodyEnrollmentSnapshot || bodyPhotoSaving"
+          >
+            <i class="pi" :class="isTakingBodyEnrollmentSnapshot ? 'pi-spin pi-spinner' : 'pi-camera'"></i>
+            Сделать снимок полного роста
+          </button>
+
+          <div class="divider"><span>ИЛИ</span></div>
         </div>
         <button class="btn-text upload-btn full-width-btn" @click="$refs.bodyEnrollmentInput.click()">
           <i class="pi pi-upload"></i> Выбрать фото полного роста
@@ -273,7 +304,10 @@ const canIssueGuestPass = computed(() => (
 const canAddGuestBodyPhoto = computed(() => auth.hasPermission(PERMISSIONS.GUESTS_WRITE))
 const canDeactivateGuestPass = computed(() => auth.hasPermission(PERMISSIONS.GUEST_PASSES_CLOSE))
 const canBuildGuestRoutes = computed(() => auth.hasPermission(PERMISSIONS.GUEST_ROUTES_READ))
-const canAnalyzeGuestRoutes = computed(() => auth.hasPermission(PERMISSIONS.GUEST_ROUTES_ANALYZE_VIDEO))
+const canAnalyzeGuestRoutes = computed(() => (
+  auth.hasPermission(PERMISSIONS.GUEST_ROUTES_ANALYZE_VIDEO) &&
+  !auth.hasAnyRole('analyst', 'manager_analyst')
+))
 
 const guests = ref([])
 const cameras = ref([])
@@ -287,6 +321,7 @@ const sortBy = ref('newest')
 
 const displayDialog = ref(false)
 const isTakingSnapshot = ref(false)
+const isTakingBodySnapshot = ref(false)
 const selectedCameraId = ref('')
 const employeeDropdownOpen = ref(false)
 const employeeSearchQuery = ref('')
@@ -302,6 +337,7 @@ const bodyEnrollmentInput = ref(null)
 const bodyEnrollmentFile = ref(null)
 const bodyEnrollmentPreview = ref(null)
 const bodyPhotoSaving = ref(false)
+const isTakingBodyEnrollmentSnapshot = ref(false)
 
 const routeDialogVisible = ref(false)
 const routeGuest = ref(null)
@@ -335,7 +371,7 @@ const parseLocalDate = (dateString) => {
 const loadData = async () => {
   try {
     const [camerasRes, guestsRes, employeesRes, buildingsRes, floorsRes] = await Promise.all([
-      canIssueGuestPass.value ? camerasApi.getCameras() : Promise.resolve({ data: [] }),
+      (canIssueGuestPass.value || canAddGuestBodyPhoto.value) ? camerasApi.getCameras() : Promise.resolve({ data: [] }),
       guestsApi.getGuests(),
       canIssueGuestPass.value ? employeesApi.getEmployees(0, 1000) : Promise.resolve({ data: [] }),
       canBuildGuestRoutes.value ? buildingsApi.getBuildings() : Promise.resolve({ data: [] }),
@@ -490,6 +526,54 @@ const takeSnapshot = async () => {
     isTakingSnapshot.value = false
   }
 }
+
+/**
+ * Получить кадр с выбранной камеры и использовать его как фото полного роста.
+ *
+ * Backend отдаёт обычный JPEG snapshot последнего кадра камеры. Для Re-ID нам
+ * важно не то, откуда пришла картинка, а чтобы на ней человек был виден в
+ * полный рост. Поэтому тот же snapshot можно сохранить как body_photo и
+ * отправить в endpoint гостя так же, как файл, выбранный вручную.
+ */
+const captureBodyPhotoFromCamera = async ({ assignFile, previewRef, fileName, setLoading }) => {
+  if (!selectedCameraId.value) return
+  setLoading(true)
+  try {
+    const res = await camerasApi.getSnapshot(selectedCameraId.value)
+    const blob = res.data
+    const file = new File([blob], fileName, { type: 'image/jpeg' })
+    assignFile(file)
+
+    revokePreview(previewRef)
+    previewRef.value = URL.createObjectURL(blob)
+  } catch (error) {
+    ui.error(ui.getErrorMessage(error, 'Не удалось сделать снимок полного роста. Проверьте камеру и положение человека в кадре.'))
+  } finally {
+    setLoading(false)
+  }
+}
+
+const takeBodySnapshot = () => captureBodyPhotoFromCamera({
+  assignFile: (file) => {
+    guestForm.value.bodyPhotoFile = file
+  },
+  previewRef: bodyPhotoPreview,
+  fileName: 'body_snapshot.jpg',
+  setLoading: (value) => {
+    isTakingBodySnapshot.value = value
+  },
+})
+
+const takeBodyEnrollmentSnapshot = () => captureBodyPhotoFromCamera({
+  assignFile: (file) => {
+    bodyEnrollmentFile.value = file
+  },
+  previewRef: bodyEnrollmentPreview,
+  fileName: 'body_enrollment_snapshot.jpg',
+  setLoading: (value) => {
+    isTakingBodyEnrollmentSnapshot.value = value
+  },
+})
 
 const openNewDialog = () => {
   if (!canIssueGuestPass.value) return
@@ -697,8 +781,8 @@ const buildRouteFromJournal = async () => {
 
 const buildRouteForCompletedJob = async (job) => {
   routeFloorId.value = String(job.floor_id)
-  const fromParts = splitDateTimeLocalValue(job.time_from)
-  const toParts = splitDateTimeLocalValue(job.time_to)
+  const fromParts = splitDateTimeLocalValue(job.started_at)
+  const toParts = splitDateTimeLocalValue(job.finished_at)
   routeDateFrom.value = fromParts.date
   routeClockFrom.value = fromParts.time
   routeDateTo.value = toParts.date

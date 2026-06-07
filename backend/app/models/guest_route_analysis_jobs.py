@@ -16,10 +16,11 @@ from sqlmodel import Field, SQLModel
 class GuestRouteAnalysisJob(SQLModel, table=True):
     """Одна попытка найти выбранного гостя на file-камерах этажа.
 
-    Запись хранит период анализа, количество обработанных камер, число событий,
-    записанных в ``TrackingLog``, предупреждения и ошибку. Благодаря этому можно
-    показать оператору, что именно произошло: обработка ещё идёт, завершилась
-    успешно, не нашла гостя или упала из-за проблем с видео/моделью.
+    Запись хранит не сами события, а состояние фоновой операции: сколько камер
+    уже обработано, сколько событий записано в ``TrackingLog``, какие
+    предупреждения появились и чем завершилась задача. Отдельные колонки
+    ``time_from`` и ``time_to`` не используются: период найденных событий для
+    маршрута хранится в уже существующих полях ``started_at`` и ``finished_at``.
     """
 
     __tablename__ = "guest_route_analysis_jobs"
@@ -32,8 +33,6 @@ class GuestRouteAnalysisJob(SQLModel, table=True):
         sa_column=Column(Integer, ForeignKey("floors.id", ondelete="CASCADE"), nullable=False, index=True)
     )
     status: str = Field(default="queued", sa_column=Column(String(32), nullable=False, index=True))
-    time_from: datetime | None = Field(default=None, sa_column=Column(DateTime, nullable=True))
-    time_to: datetime | None = Field(default=None, sa_column=Column(DateTime, nullable=True))
     processed_cameras: int = Field(default=0)
     events_written: int = Field(default=0)
     warnings_json: list[str] = Field(default_factory=list, sa_column=Column(JSON, nullable=False))

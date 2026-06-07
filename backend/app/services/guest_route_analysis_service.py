@@ -152,9 +152,9 @@ def _camera_time_offset_sec(camera: Camera) -> float:
 def _read_video_duration(path: Path) -> float:
     """Определить длительность видеофайла камеры.
 
-    Длительность нужна, чтобы построить общий период анализа ``time_from`` /
-    ``time_to``. Позже именно этот период используется при построении маршрута
-    по журналу, поэтому старые события TrackingLog не должны попадать в результат.
+    Длительность нужна для синхронизации события с условной временной шкалой
+    анализа. Сами границы периода больше не хранятся в таблице задания: сервис
+    рассчитывает их на лету при сборке payload-а для frontend.
     """
 
     cap = cv2.VideoCapture(str(path))
@@ -218,6 +218,39 @@ def count_configured_offline_cameras(session: Session, floor_id: int) -> int:
         for camera in cameras
         if (camera.ip_address or "").strip().lower().startswith(VIDEO_FILE_PREFIX)
     )
+
+
+def _estimate_job_time_window(session: Session, job: GuestRouteAnalysisJob) -> tuple[datetime | None, datetime | None]:
+    """Вернуть период событий, который относится к заданию анализа маршрута.
+
+    В таблице больше нет отдельных колонок ``time_from`` и ``time_to``.
+    Для задания маршрута период анализа хранится в существующих полях
+    ``started_at`` и ``finished_at``: первое поле означает начало временного
+    окна, второе - конец временного окна. Если задание ещё не успело записать
+    эти значения, сервис оценивает окно от ``created_at`` и длительности
+    активных file-видео камер.
+    """
+
+    if job.started_at is not None and job.finished_at is not None:
+        return job.started_at, job.finished_at
+
+    reference_time = job.created_at
+    if reference_time is None:
+        return None, None
+
+    sources, _warnings = get_offline_camera_sources(session, job.floor_id)
+    if not sources:
+        return None, None
+
+    max_duration = max(source.duration_sec for source in sources)
+    camera_offsets = [_camera_time_offset_sec(source.camera) for source in sources]
+    min_offset = min(camera_offsets, default=0.0)
+    max_offset = max(camera_offsets, default=0.0)
+
+    started_at = reference_time - timedelta(seconds=max_duration + TIME_WINDOW_PADDING_SEC)
+    started_at += timedelta(seconds=min(0.0, min_offset))
+    finished_at = reference_time + timedelta(seconds=max(0.0, max_offset))
+    return started_at, finished_at
 
 
 def create_guest_route_analysis_job(session: Session, guest_id: int, floor_id: int) -> GuestRouteAnalysisJob:
@@ -319,7 +352,7 @@ def expire_stale_route_analysis_jobs(session: Session) -> int:
 
     expired_count = 0
     for job in stale_jobs:
-        reference_time = job.started_at or job.created_at
+        reference_time = job.created_at
         if (now - reference_time).total_seconds() <= timeout_sec:
             continue
 
@@ -467,7 +500,7 @@ def _process_camera_video(
     source: OfflineCameraSource,
     guest: Guest,
     guest_vector: np.ndarray,
-    time_from: datetime,
+    started_at: datetime,
     sample_interval_sec: float,
 ) -> int:
     """Проанализировать видео одной камеры и записать лучшее появление гостя.
@@ -550,7 +583,7 @@ def _process_camera_video(
     if selected_candidate is None:
         return 0
 
-    event_time = time_from + timedelta(
+    event_time = started_at + timedelta(
         seconds=selected_candidate.timestamp_sec + _camera_time_offset_sec(source.camera)
     )
     if best_candidate and best_candidate.face_confirmed and best_candidate.body_match is not None:
@@ -605,8 +638,8 @@ def _run_job(job_id: int) -> None:
             min_offset = min(camera_offsets, default=0.0)
             max_offset = max(camera_offsets, default=0.0)
             video_base_time = datetime.now() - timedelta(seconds=max_duration + TIME_WINDOW_PADDING_SEC)
-            job.time_from = video_base_time + timedelta(seconds=min(0.0, min_offset))
-            job.time_to = video_base_time + timedelta(
+            job.started_at = video_base_time + timedelta(seconds=min(0.0, min_offset))
+            job.finished_at = video_base_time + timedelta(
                 seconds=max_duration + TIME_WINDOW_PADDING_SEC + max(0.0, max_offset)
             )
             session.add(job)
@@ -626,7 +659,7 @@ def _run_job(job_id: int) -> None:
                         source=source,
                         guest=guest,
                         guest_vector=guest_vector,
-                        time_from=video_base_time,
+                        started_at=video_base_time,
                         sample_interval_sec=DEFAULT_SAMPLE_INTERVAL_SEC,
                     )
                 except Exception:
@@ -645,7 +678,6 @@ def _run_job(job_id: int) -> None:
                 _append_job_warning(job, "Гость не найден на видео выбранного этажа")
 
             job.status = "completed"
-            job.finished_at = datetime.now()
             job.events_written = events_written
             session.add(job)
             session.commit()
@@ -694,14 +726,15 @@ def build_job_payload(session: Session, job: GuestRouteAnalysisJob) -> dict:
 
     probable_route = None
     route_warnings: list[str] = []
-    if job.status == "completed" and job.time_from and job.time_to:
+    route_started_at, route_finished_at = _estimate_job_time_window(session, job)
+    if job.status == "completed" and route_started_at and route_finished_at:
         try:
             probable_route = build_guest_probable_route(
                 session=session,
                 guest_id=job.guest_id,
                 floor_id=job.floor_id,
-                time_from=job.time_from,
-                time_to=job.time_to,
+                time_from=route_started_at,
+                time_to=route_finished_at,
             )
             route_warnings = probable_route.get("warnings") or []
         except Exception as exc:
@@ -717,8 +750,6 @@ def build_job_payload(session: Session, job: GuestRouteAnalysisJob) -> dict:
         "guest_id": job.guest_id,
         "floor_id": job.floor_id,
         "status": job.status,
-        "time_from": job.time_from,
-        "time_to": job.time_to,
         "processed_cameras": job.processed_cameras,
         "total_cameras": count_configured_offline_cameras(session, job.floor_id),
         "events_written": job.events_written,

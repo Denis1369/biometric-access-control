@@ -47,8 +47,6 @@ class GuestRouteAnalysisJobRead(SQLModel):
     guest_id: int
     floor_id: int
     status: str
-    time_from: datetime | None = None
-    time_to: datetime | None = None
     processed_cameras: int
     total_cameras: int
     events_written: int
