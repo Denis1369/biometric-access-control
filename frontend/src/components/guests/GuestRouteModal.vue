@@ -9,8 +9,13 @@
       </div>
 
       <p class="capture-hint">
-        Гость: {{ formatGuestName(guest) }}. Можно мгновенно построить маршрут по уже записанному журналу
-        или сначала проанализировать file-видео камер выбранного этажа.
+        Гость: {{ formatGuestName(guest) }}.
+        <template v-if="canStartAnalysis">
+          Можно мгновенно построить маршрут по уже записанному журналу или сначала проанализировать file-видео камер выбранного этажа.
+        </template>
+        <template v-else>
+          Можно построить маршрут по уже записанному журналу событий.
+        </template>
       </p>
 
       <div class="route-dialog-layout">
@@ -191,7 +196,12 @@
               Для выбранного этажа не загружен план.
             </div>
             <div v-else-if="!result && !resultLoading" class="route-plan-empty overlay-empty">
-              Нажмите «Построить по журналу» или «Проанализировать видео и построить».
+              <template v-if="canStartAnalysis">
+                Нажмите «Построить по журналу» или «Проанализировать видео и построить».
+              </template>
+              <template v-else>
+                Нажмите «Построить по журналу».
+              </template>
             </div>
           </div>
         </div>

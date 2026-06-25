@@ -306,7 +306,7 @@ const canDeactivateGuestPass = computed(() => auth.hasPermission(PERMISSIONS.GUE
 const canBuildGuestRoutes = computed(() => auth.hasPermission(PERMISSIONS.GUEST_ROUTES_READ))
 const canAnalyzeGuestRoutes = computed(() => (
   auth.hasPermission(PERMISSIONS.GUEST_ROUTES_ANALYZE_VIDEO) &&
-  !auth.hasAnyRole('analyst', 'manager_analyst')
+  !auth.hasAnyRole('analyst', 'manager_analyst', 'checkpoint_operator')
 ))
 
 const guests = ref([])
